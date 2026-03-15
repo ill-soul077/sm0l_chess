@@ -7,7 +7,7 @@ import pygame
 
 from board import create_board, apply_move, is_checkmate, is_stalemate, is_in_check, find_king
 from ai_minimax import MinimaxPlayer
-from ai_fuzzy import FuzzyPlayer
+from ai_mcts import MCTSPlayer
 from gui import GUI
 from pieces import King, Queen, Knight, Pawn
 
@@ -66,7 +66,7 @@ def run_game():
     gui     = GUI()
 
     white   = MinimaxPlayer(color='W', depth=3)
-    black   = FuzzyPlayer(color='B')
+    black   = MCTSPlayer(color='B', simulations=800)
     players = {'W': white, 'B': black}
 
     current  = 'W'

@@ -181,8 +181,8 @@ class GUI:
         self.screen.blit(title, (x, y)); y += 30
 
         # Players
-        p1 = self.font_label.render("♔ White — Minimax (α-β)", True, (200, 220, 200))
-        p2 = self.font_label.render("♚ Black — Fuzzy Logic",   True, (200, 200, 220))
+        p1 = self.font_label.render("♔ White — Minimax (α-β, depth 3)", True, (200, 220, 200))
+        p2 = self.font_label.render("♚ Black — MCTS (800 simulations)",  True, (200, 200, 220))
         self.screen.blit(p1, (x, y)); y += 20
         self.screen.blit(p2, (x, y)); y += 28
 
