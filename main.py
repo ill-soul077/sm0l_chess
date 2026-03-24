@@ -5,8 +5,8 @@ import threading
 import time
 import pygame
 
-from board import create_board, apply_move, is_checkmate, is_stalemate, is_in_check, find_king
-from ai_minimax import MinimaxPlayer
+from board import create_board, apply_move, is_checkmate, is_stalemate, is_in_check, find_king, get_legal_moves
+from ai_minimax import MinimaxPlayer, evaluate
 from ai_mcts import MCTSPlayer
 from gui import GUI
 from pieces import King, Queen, Knight, Pawn
@@ -26,6 +26,72 @@ def col_letter(c):
     return 'abcdef'[c]
 
 
+def position_key(board, side_to_move):
+    """
+    Hashable board state key for repetition detection.
+    Includes side to move and pawn has_moved flags because they affect legal moves.
+    """
+    rows = []
+    for row in board:
+        row_key = []
+        for piece in row:
+            if piece is None:
+                row_key.append(None)
+                continue
+            p_type = type(piece).__name__
+            pawn_moved = piece.has_moved if isinstance(piece, Pawn) else None
+            row_key.append((piece.color, p_type, pawn_moved))
+        rows.append(tuple(row_key))
+    return (side_to_move, tuple(rows))
+
+
+def would_trigger_threefold(board, move, mover_color, repetition_count):
+    """Return True if applying move creates a position seen 3 times."""
+    opponent = 'B' if mover_color == 'W' else 'W'
+    next_board = apply_move(board, move[0], move[1])
+    next_key = position_key(next_board, opponent)
+    return repetition_count.get(next_key, 0) + 1 >= 3
+
+
+def choose_non_repetition_move(board, mover_color, repetition_count):
+    """
+    Pick a legal move that avoids immediate threefold repetition, if one exists.
+    Uses evaluation as a tie-breaker so the engine still pushes for wins.
+    """
+    opponent = 'B' if mover_color == 'W' else 'W'
+    legal = get_legal_moves(board, mover_color)
+    candidates = []
+
+    for piece, dest in legal:
+        next_board = apply_move(board, piece, dest)
+        next_key = position_key(next_board, opponent)
+        if repetition_count.get(next_key, 0) + 1 >= 3:
+            continue
+        candidates.append((piece, dest, next_board))
+
+    if not candidates:
+        return None
+
+    def score(candidate):
+        piece, dest, next_board = candidate
+        if is_checkmate(next_board, opponent):
+            return 1_000_000
+
+        val = evaluate(next_board, mover_color)
+
+        # Prefer avoiding stalemate unless already in a clearly losing state.
+        if is_stalemate(next_board, opponent) and val > -1.5:
+            val -= 5.0
+
+        if is_in_check(next_board, opponent):
+            val += 0.35
+
+        return val
+
+    best = max(candidates, key=score)
+    return (best[0], best[1])
+
+
 # ── Threaded AI call ──────────────────────────────────────────────────────────
 
 class AIWorker(threading.Thread):
@@ -34,9 +100,14 @@ class AIWorker(threading.Thread):
         self.player = player
         self.board  = board
         self.result = None
+        self.error  = None
 
     def run(self):
-        self.result = self.player.choose_move(self.board)
+        try:
+            self.result = self.player.choose_move(self.board)
+        except Exception as exc:
+            self.error = exc
+            self.result = None
 
 
 # ── Countdown helper ──────────────────────────────────────────────────────────
@@ -72,6 +143,11 @@ def run_game():
 
     current  = 'W'
     move_num = 0
+
+    # Threefold repetition tracking: same position + same side to move.
+    repetition_count = {}
+    start_key = position_key(board, current)
+    repetition_count[start_key] = 1
 
     gui.add_log("Game started!")
     gui.add_log(f"White: {white.name}")
@@ -130,12 +206,38 @@ def run_game():
 
         result = worker.result
 
+        if worker.error is not None:
+            # Keep the game alive if an AI thread crashes on one position.
+            gui.add_log(f"{color_name} AI error, using fallback move")
+            legal_fallback = get_legal_moves(board, current)
+            if legal_fallback:
+                def fb_score(move):
+                    nb = apply_move(board, move[0], move[1])
+                    return evaluate(nb, current)
+                result = max(legal_fallback, key=fb_score)
+
         if result is None:
-            gui.add_log(f"{color_name} has no moves — Draw!")
-            gui.show_winner("Draw — No Moves!", board)
-            return
+            # Safety net: if legal moves exist but AI returned None, do not force a false draw.
+            legal_fallback = get_legal_moves(board, current)
+            if legal_fallback:
+                gui.add_log(f"{color_name} returned no move, using fallback legal move")
+                def fb_score(move):
+                    nb = apply_move(board, move[0], move[1])
+                    return evaluate(nb, current)
+                result = max(legal_fallback, key=fb_score)
+            else:
+                gui.add_log(f"{color_name} has no moves — Draw!")
+                gui.show_winner("Draw — No Moves!", board)
+                return
 
         piece, dest = result
+
+        # Anti-draw policy: if chosen move causes 3-fold repetition, try another.
+        if would_trigger_threefold(board, (piece, dest), current, repetition_count):
+            alternative = choose_non_repetition_move(board, current, repetition_count)
+            if alternative is not None:
+                piece, dest = alternative
+
         r0, c0      = piece.row, piece.col
         r1, c1      = dest
 
@@ -149,10 +251,22 @@ def run_game():
         board    = apply_move(board, piece, dest)
         move_num += 1
 
+        # Next turn belongs to opponent after current side moves.
+        next_position_key = position_key(board, opponent)
+        repetition_count[next_position_key] = repetition_count.get(next_position_key, 0) + 1
+
         opp_in_check = is_in_check(board, opponent)
         if opp_in_check:
             notation += " +"
         gui.add_log(notation)
+
+        if repetition_count[next_position_key] >= 3:
+            gui.add_log("Threefold repetition — Draw!")
+            gui.update(board, "Draw! (Repetition)", move_num,
+                       last_move=((r0, c0), (r1, c1)))
+            pygame.time.delay(1000)
+            gui.show_winner("Draw — Threefold Repetition!", board)
+            return
 
         opp_check_pos = None
         if opp_in_check:
