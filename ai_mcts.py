@@ -1,116 +1,193 @@
-# ai_mcts.py — Player 2: Monte Carlo Tree Search (MCTS) — IMPROVED
-#
-# Improvements over v1:
-#   1. Immediate win detection   — checks for checkmate-in-1 before any simulation
-#   2. Smart expansion ordering  — tries captures > promotions > centre > rest first
-#   3. Better rollout policy     — always escapes check, takes promotions, avoids draws when winning
-#   4. Tree reuse                — reuses subtree from the previous move (saves work)
-#   5. Continuous scoring        — backpropagates material score (not just +1/0/-1)
-#   6. Draw avoidance            — penalises draws when MCTS is materially ahead
+# ai_mcts.py - Monte Carlo Tree Search with move ordering, tree reuse,
+# and a rollout policy that prefers tactical, non-blundering moves.
 
+import copy
 import math
 import random
-import copy
 import time
 
-from board import (get_legal_moves, apply_move, is_checkmate,
-                   is_stalemate, is_in_check)
-from pieces import King, Queen, Knight, Pawn
+from board import apply_move, get_legal_moves, is_checkmate, is_in_check, is_stalemate
+from pieces import King, Knight, Pawn, Queen
 
-# ── Tuning constants ──────────────────────────────────────────────────────────
-SIMULATIONS  = 1000
-MAX_ROLLOUT  = 50
-UCB_C        = 1.41
-TIME_LIMIT   = 4.5
-PIECE_VALS   = {Queen: 9, Knight: 3, Pawn: 1, King: 0}
-CENTER       = {(2,2),(2,3),(3,2),(3,3)}
+SIMULATIONS = 1000
+MAX_ROLLOUT = 50
+UCB_C = 1.41
+TIME_LIMIT = 4.5
+ROLLOUT_TEMPERATURE = 15.0
+PIECE_VALS = {Queen: 9, Knight: 3, Pawn: 1, King: 0}
+CENTER = {(2, 2), (2, 3), (3, 2), (3, 3)}
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Helpers
-# ─────────────────────────────────────────────────────────────────────────────
 
 def material(board, color):
-    return sum(PIECE_VALS.get(type(p), 0)
-               for row in board for p in row
-               if p and p.color == color)
+    return sum(
+        PIECE_VALS.get(type(piece), 0)
+        for row in board
+        for piece in row
+        if piece and piece.color == color
+    )
 
 
 def material_score(board, mcts_color):
     """Continuous result in [-1,+1] based on material difference."""
-    opp   = 'B' if mcts_color == 'W' else 'W'
-    my_m  = material(board, mcts_color)
-    opp_m = material(board, opp)
-    total = my_m + opp_m
+    opponent = "B" if mcts_color == "W" else "W"
+    my_material = material(board, mcts_color)
+    opp_material = material(board, opponent)
+    total = my_material + opp_material
     if total == 0:
         return 0.0
-    return max(-1.0, min(1.0, (my_m - opp_m) / total))
+    return max(-1.0, min(1.0, (my_material - opp_material) / total))
+
+
+def is_square_attacked(board, square, by_color):
+    target_row, target_col = square
+    for row in board:
+        for piece in row:
+            if piece and piece.color == by_color:
+                if (target_row, target_col) in piece.get_moves(board):
+                    return True
+    return False
+
+
+def count_attackers(board, square, by_color):
+    target_row, target_col = square
+    count = 0
+    for row in board:
+        for piece in row:
+            if piece and piece.color == by_color:
+                if (target_row, target_col) in piece.get_moves(board):
+                    count += 1
+    return count
 
 
 def move_priority(piece, dest, board):
     """
-    Score a move for ordering (higher = expand / try first).
-    Captures > Promotions > Centre > Advance pawns > rest
+    Score a move for tree expansion ordering.
+    Captures > Promotions > Centre > Advance pawns > rest.
     """
-    score  = 0
+    score = 0.0
     target = board[dest[0]][dest[1]]
     if target is not None:
-        victim   = PIECE_VALS.get(type(target), 0)
+        victim = PIECE_VALS.get(type(target), 0)
         attacker = PIECE_VALS.get(type(piece), 0)
-        score   += 10 + victim - attacker * 0.1   # MVV-LVA
+        score += 10.0 + victim - attacker * 0.1
     if isinstance(piece, Pawn):
-        if (piece.color == 'W' and dest[0] == 0) or \
-           (piece.color == 'B' and dest[0] == 5):
-            score += 20                            # promotion
-        elif piece.color == 'B':
+        if (piece.color == "W" and dest[0] == 0) or (piece.color == "B" and dest[0] == 5):
+            score += 20.0
+        elif piece.color == "B":
             score += dest[0] * 0.3
         else:
             score += (5 - dest[0]) * 0.3
     if dest in CENTER:
-        score += 2
+        score += 2.0
     return score
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# IMPROVEMENT 1 — Immediate checkmate detection
-# ─────────────────────────────────────────────────────────────────────────────
-
 def find_immediate_checkmate(board, color):
     """Return a move causing immediate checkmate, or None."""
-    opponent = 'B' if color == 'W' else 'W'
+    opponent = "B" if color == "W" else "W"
     for piece, dest in get_legal_moves(board, color):
-        nb = apply_move(board, piece, dest)
-        if is_checkmate(nb, opponent):
+        new_board = apply_move(board, piece, dest)
+        if is_checkmate(new_board, opponent):
             return (piece, dest)
     return None
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Node
-# ─────────────────────────────────────────────────────────────────────────────
+def is_move_defended(board, square, color):
+    return count_attackers(board, square, color) > 0
+
+
+def rollout_move_score(board, piece, dest, color):
+    opponent = "B" if color == "W" else "W"
+    before_material = material(board, color) - material(board, opponent)
+    new_board = apply_move(board, piece, dest)
+    moved_piece = new_board[dest[0]][dest[1]]
+    score = 0.0
+
+    if is_checkmate(new_board, opponent):
+        return 100000.0
+
+    if isinstance(piece, Pawn) and ((piece.color == "W" and dest[0] == 0) or (piece.color == "B" and dest[0] == 5)):
+        score += 350.0
+
+    captured = board[dest[0]][dest[1]]
+    if captured is not None:
+        score += 100.0 + PIECE_VALS.get(type(captured), 0) * 35.0
+
+    if is_in_check(new_board, opponent):
+        score += 80.0
+
+    if dest in CENTER:
+        score += 18.0
+
+    if isinstance(piece, Pawn):
+        score += dest[0] * 4.0 if color == "B" else (5 - dest[0]) * 4.0
+
+    attackers = count_attackers(new_board, dest, opponent)
+    defenders = count_attackers(new_board, dest, color)
+    if attackers > 0:
+        hanging_penalty = 90.0 + PIECE_VALS.get(type(moved_piece), 0) * 20.0
+        score -= hanging_penalty
+        if defenders == 0:
+            score -= 60.0
+        elif defenders < attackers:
+            score -= 25.0
+
+    if is_in_check(new_board, color):
+        score -= 250.0
+
+    opponent_wins = 0
+    for opp_piece, opp_dest in get_legal_moves(new_board, opponent):
+        reply_board = apply_move(new_board, opp_piece, opp_dest)
+        if is_checkmate(reply_board, color):
+            opponent_wins += 1
+        reply_target = new_board[opp_dest[0]][opp_dest[1]]
+        if reply_target is not None and PIECE_VALS.get(type(reply_target), 0) >= 3:
+            score -= 40.0
+    if opponent_wins:
+        score -= 500.0
+
+    after_material = material(new_board, color) - material(new_board, opponent)
+    score += (after_material - before_material) * 12.0
+    return score
+
+
+def select_rollout_move(board, moves, color):
+    scored = []
+    for piece, dest in moves:
+        scored.append((rollout_move_score(board, piece, dest, color), piece, dest))
+
+    scored.sort(key=lambda item: item[0], reverse=True)
+    top = scored[:3]
+    max_score = max(item[0] for item in top)
+
+    weights = []
+    for score, _, _ in top:
+        weights.append(math.exp((score - max_score) / ROLLOUT_TEMPERATURE))
+
+    chosen = random.choices(top, weights=weights, k=1)[0]
+    return chosen[1], chosen[2]
+
 
 class Node:
-    __slots__ = ('board','color','parent','move','wins','visits','children','untried')
+    __slots__ = ("board", "color", "parent", "move", "wins", "visits", "children", "untried")
 
     def __init__(self, board, color, parent=None, move=None):
-        self.board    = board
-        self.color    = color
-        self.parent   = parent
-        self.move     = move
-        self.wins     = 0.0
-        self.visits   = 0
+        self.board = board
+        self.color = color
+        self.parent = parent
+        self.move = move
+        self.wins = 0.0
+        self.visits = 0
         self.children = []
-        self.untried  = None
+        self.untried = None
 
-    # IMPROVEMENT 2 — smart ordering: sort ascending, pop from end = best first
     def _init_untried(self):
         moves = get_legal_moves(self.board, self.color)
-        moves.sort(key=lambda m: move_priority(m[0], m[1], self.board))
+        moves.sort(key=lambda move: move_priority(move[0], move[1], self.board))
         self.untried = moves
 
     def is_terminal(self):
-        return (is_checkmate(self.board, self.color) or
-                is_stalemate(self.board, self.color))
+        return is_checkmate(self.board, self.color) or is_stalemate(self.board, self.color)
 
     def is_fully_expanded(self):
         if self.untried is None:
@@ -119,140 +196,82 @@ class Node:
 
     def ucb1(self, parent_visits):
         if self.visits == 0:
-            return float('inf')
-        return (self.wins / self.visits +
-                UCB_C * math.sqrt(math.log(parent_visits) / self.visits))
+            return float("inf")
+        return (self.wins / self.visits) + UCB_C * math.sqrt(math.log(parent_visits) / self.visits)
 
     def best_child_ucb(self):
-        return max(self.children, key=lambda c: c.ucb1(self.visits))
+        return max(self.children, key=lambda child: child.ucb1(self.visits))
 
     def best_child_visits(self):
-        return max(self.children, key=lambda c: c.visits)
+        return max(self.children, key=lambda child: child.visits)
 
     def expand(self):
         if self.untried is None:
             self._init_untried()
-        move        = self.untried.pop()   # highest priority
+        move = self.untried.pop()
         piece, dest = move
-        new_board   = apply_move(self.board, piece, dest)
-        opponent    = 'B' if self.color == 'W' else 'W'
-        child       = Node(new_board, opponent, parent=self, move=move)
+        new_board = apply_move(self.board, piece, dest)
+        opponent = "B" if self.color == "W" else "W"
+        child = Node(new_board, opponent, parent=self, move=move)
         self.children.append(child)
         return child
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# IMPROVEMENT 3 — Better rollout policy
-# ─────────────────────────────────────────────────────────────────────────────
-
 def rollout(board, color, mcts_color):
-    """
-    Simulate a game with smart policy:
-      - Always take an immediate checkmate
-      - Always take a promotion
-      - Weighted random otherwise (captures preferred)
-      - IMPROVEMENT 5: return continuous material score at depth limit
-      - IMPROVEMENT 6: penalise draws when materially ahead
-    """
     current = color
 
     for _ in range(MAX_ROLLOUT):
-        opponent_of_current = 'B' if current == 'W' else 'W'
+        opponent = "B" if current == "W" else "W"
 
         if is_checkmate(board, current):
-            winner = opponent_of_current
+            winner = opponent
             return 1.0 if winner == mcts_color else -1.0
 
         if is_stalemate(board, current):
-            # IMPROVEMENT 6 — draw avoidance
-            mat = material_score(board, mcts_color)
-            return -0.3 if mat > 0.2 else 0.0
+            score = material_score(board, mcts_color)
+            return -0.3 if score > 0.2 else 0.0
 
         moves = get_legal_moves(board, current)
         if not moves:
-            mat = material_score(board, mcts_color)
-            return -0.3 if mat > 0.2 else 0.0
+            score = material_score(board, mcts_color)
+            return -0.3 if score > 0.2 else 0.0
 
-        # Always take immediate checkmate
-        for piece, dest in moves:
-            nb = apply_move(board, piece, dest)
-            if is_checkmate(nb, opponent_of_current):
-                board   = nb
-                winner  = current
-                return 1.0 if winner == mcts_color else -1.0
+        forced_mate = find_immediate_checkmate(board, current)
+        if forced_mate is not None:
+            piece, dest = forced_mate
+        else:
+            piece, dest = select_rollout_move(board, moves, current)
 
-        # Always take a promotion
-        promo = [(p, d) for p, d in moves
-                 if isinstance(p, Pawn) and
-                    ((p.color=='W' and d[0]==0) or (p.color=='B' and d[0]==5))]
-        if promo:
-            piece, dest = promo[0]
-            board   = apply_move(board, piece, dest)
-            current = opponent_of_current
-            continue
+        board = apply_move(board, piece, dest)
+        current = opponent
 
-        # Weighted random — captures + centre preferred
-        weighted = []
-        for piece, dest in moves:
-            w      = 1.0
-            target = board[dest[0]][dest[1]]
-            if target is not None:
-                w += PIECE_VALS.get(type(target), 0) * 2.0
-            if dest in CENTER:
-                w += 1.5
-            if isinstance(piece, Pawn):
-                adv = dest[0] if current == 'B' else (5 - dest[0])
-                w  += adv * 0.2
-            weighted.append((w, piece, dest))
-
-        total  = sum(w for w,_,_ in weighted)
-        r      = random.uniform(0, total)
-        cumul  = 0.0
-        chosen = weighted[-1]
-        for item in weighted:
-            cumul += item[0]
-            if cumul >= r:
-                chosen = item
-                break
-
-        board   = apply_move(board, chosen[1], chosen[2])
-        current = opponent_of_current
-
-    # IMPROVEMENT 5 — continuous score instead of hard +1/-1 guess
     return material_score(board, mcts_color)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# IMPROVEMENT 4 — Board equality check for tree reuse
-# ─────────────────────────────────────────────────────────────────────────────
-
-def _boards_equal(b1, b2):
-    for r in range(6):
-        for c in range(6):
-            p1, p2 = b1[r][c], b2[r][c]
-            if type(p1) != type(p2):
+def _boards_equal(board_a, board_b):
+    for row in range(6):
+        for col in range(6):
+            piece_a = board_a[row][col]
+            piece_b = board_b[row][col]
+            if type(piece_a) != type(piece_b):
                 return False
-            if p1 is not None and p1.color != p2.color:
-                return False
+            if piece_a is not None:
+                if piece_a.color != piece_b.color:
+                    return False
+                if getattr(piece_a, "has_moved", False) != getattr(piece_b, "has_moved", False):
+                    return False
     return True
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Main MCTS search
-# ─────────────────────────────────────────────────────────────────────────────
-
-def mcts_search(board, color, n_simulations=SIMULATIONS,
-                time_limit=TIME_LIMIT, reuse_root=None):
+def mcts_search(board, color, n_simulations=SIMULATIONS, time_limit=TIME_LIMIT, reuse_root=None):
     """
     Run MCTS and return (best_move, root_node).
     Pass reuse_root from the previous call for tree reuse.
     """
-    # IMPROVEMENT 1 — free win check
     instant_win = find_immediate_checkmate(board, color)
     if instant_win:
         return instant_win, None
 
-    # IMPROVEMENT 4 — try to reuse existing tree
     root = None
     if reuse_root is not None:
         for child in reuse_root.children:
@@ -261,42 +280,36 @@ def mcts_search(board, color, n_simulations=SIMULATIONS,
                     grandchild.parent = None
                     root = grandchild
                     break
-            if root:
+            if root is not None:
                 break
 
     if root is None:
         root = Node(board, color)
 
-    start     = time.time()
-    sim_count = 0
+    start = time.time()
+    simulations = 0
 
-    while sim_count < n_simulations and (time.time() - start) < time_limit:
-
-        # 1. SELECT
+    while simulations < n_simulations and (time.time() - start) < time_limit:
         node = root
+
         while not node.is_terminal() and node.is_fully_expanded():
             node = node.best_child_ucb()
 
-        # 2. EXPAND
         if not node.is_terminal() and not node.is_fully_expanded():
             node = node.expand()
 
-        # 3. SIMULATE
         result = rollout(copy.deepcopy(node.board), node.color, color)
 
-        # 4. BACKPROPAGATE — IMPROVEMENT 5: continuous score propagated correctly
-        n = node
-        while n is not None:
-            n.visits += 1
-            # Nodes where it was our turn to move → we benefit from +result
-            # Nodes where it was opponent's turn  → they lose when result is high
-            if n.color != color:
-                n.wins += result
+        current = node
+        while current is not None:
+            current.visits += 1
+            if current.color != color:
+                current.wins += result
             else:
-                n.wins -= result
-            n = n.parent
+                current.wins -= result
+            current = current.parent
 
-        sim_count += 1
+        simulations += 1
 
     if not root.children:
         legal = get_legal_moves(board, color)
@@ -307,22 +320,19 @@ def mcts_search(board, color, n_simulations=SIMULATIONS,
     return best.move, root
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# MCTSPlayer
-# ─────────────────────────────────────────────────────────────────────────────
-
 class MCTSPlayer:
-    def __init__(self, color='B', simulations=SIMULATIONS):
-        self.color       = color
+    def __init__(self, color="B", simulations=SIMULATIONS):
+        self.color = color
         self.simulations = simulations
-        self.name        = f"MCTS+ ({simulations} sims)"
-        self._root       = None   # stored tree root for reuse
+        self.name = f"MCTS+ ({simulations} sims)"
+        self._root = None
 
     def choose_move(self, board):
         move, new_root = mcts_search(
-            board, self.color,
-            n_simulations = self.simulations,
-            reuse_root    = self._root,
+            board,
+            self.color,
+            n_simulations=self.simulations,
+            reuse_root=self._root,
         )
-        self._root = new_root   # save for next call (tree reuse)
+        self._root = new_root
         return move

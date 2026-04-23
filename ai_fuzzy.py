@@ -1,157 +1,224 @@
-# ai_fuzzy.py — Player 2: Fuzzy Logic System
+# ai_fuzzy.py - Formal Sugeno-style fuzzy logic player.
 
-from board import get_legal_moves, apply_move, is_in_check, is_checkmate
-from pieces import King, Queen, Knight, Pawn
-import random
+from board import apply_move, get_legal_moves, is_checkmate, is_in_check
+from pieces import King, Knight, Pawn, Queen
 
-# ──────────────────────────────────────────────
-# Fuzzification helpers
-# ──────────────────────────────────────────────
+PIECE_VALUES = {
+    King: 0,
+    Queen: 9,
+    Knight: 3,
+    Pawn: 1,
+}
 
-def material_score(board, color):
-    """Raw material count for color."""
-    values = {Queen: 9, Knight: 3, Pawn: 1, King: 0}
-    score = 0
+CENTER = {(2, 2), (2, 3), (3, 2), (3, 3)}
+VERY_BAD = 10.0
+BAD = 30.0
+NEUTRAL = 50.0
+GOOD = 70.0
+EXCELLENT = 90.0
+
+
+def triangular(x, a, b, c):
+    if x <= a or x >= c:
+        return 0.0
+    if x == b:
+        return 1.0
+    if x < b:
+        return (x - a) / (b - a)
+    return (c - x) / (c - b)
+
+
+def trapezoidal(x, a, b, c, d):
+    if x <= a or x >= d:
+        return 0.0
+    if b <= x <= c:
+        return 1.0
+    if x < b:
+        return (x - a) / (b - a)
+    return (d - x) / (d - c)
+
+
+def material_total(board, color):
+    return sum(
+        PIECE_VALUES.get(type(piece), 0)
+        for row in board
+        for piece in row
+        if piece and piece.color == color
+    )
+
+
+def material_advantage(board, color):
+    opponent = "B" if color == "W" else "W"
+    return material_total(board, color) - material_total(board, opponent)
+
+
+def count_attackers(board, square, by_color):
+    row_target, col_target = square
+    total = 0
     for row in board:
         for piece in row:
-            if piece and piece.color == color:
-                score += values.get(type(piece), 0)
-    return score
+            if piece and piece.color == by_color:
+                if (row_target, col_target) in piece.get_moves(board):
+                    total += 1
+    return total
 
 
-def fuzzy_material_advantage(board, color):
-    """
-    Returns fuzzy membership: (low, medium, high)
-    Advantage = my material - opponent material
-    """
-    opponent = 'B' if color == 'W' else 'W'
-    diff = material_score(board, color) - material_score(board, opponent)
-
-    if diff <= -3:
-        return (1.0, 0.0, 0.0)   # Low
-    elif diff <= 0:
-        d = (diff + 3) / 3
-        return (1-d, d, 0.0)
-    elif diff <= 3:
-        d = diff / 3
-        return (0.0, 1-d, d)
-    else:
-        return (0.0, 0.0, 1.0)   # High
-
-
-def fuzzy_king_danger(board, color):
-    """
-    Returns (safe, exposed) membership.
-    Checks: is king in check? how many attackers?
-    """
-    opponent = 'B' if color == 'W' else 'W'
-    in_check = is_in_check(board, color)
-
-    # Count how many opponent pieces can reach king area
-    king_pos = None
+def find_king_square(board, color):
     for row in board:
         for piece in row:
             if isinstance(piece, King) and piece.color == color:
-                king_pos = (piece.row, piece.col)
+                return (piece.row, piece.col)
+    return None
 
-    if king_pos is None:
-        return (0.0, 1.0)
+
+def king_danger_index(board, color):
+    opponent = "B" if color == "W" else "W"
+    king_square = find_king_square(board, color)
+    if king_square is None:
+        return 6.0
 
     threats = 0
     for row in board:
         for piece in row:
             if piece and piece.color == opponent:
-                moves = piece.get_moves(board)
-                # Count moves near king
-                for (r, c) in moves:
-                    if abs(r - king_pos[0]) <= 1 and abs(c - king_pos[1]) <= 1:
+                for dest_row, dest_col in piece.get_moves(board):
+                    if abs(dest_row - king_square[0]) <= 1 and abs(dest_col - king_square[1]) <= 1:
                         threats += 1
 
-    if in_check:
-        return (0.0, 1.0)        # Fully exposed
-    elif threats >= 3:
-        return (0.2, 0.8)
-    elif threats >= 1:
-        return (0.6, 0.4)
-    else:
-        return (1.0, 0.0)        # Safe
+    value = (2 if is_in_check(board, color) else 0) + threats
+    return float(max(0, min(6, value)))
 
 
-def fuzzy_center_control(board, color):
-    """
-    Returns (weak, strong) membership based on center squares controlled.
-    """
-    CENTER = [(2,2),(2,3),(3,2),(3,3)]
-    count = 0
+def center_control_count(board, color):
+    controlled = set()
     for row in board:
         for piece in row:
             if piece and piece.color == color:
-                for (r, c) in piece.get_moves(board):
-                    if (r, c) in CENTER:
-                        count += 1
-
-    if count == 0:
-        return (1.0, 0.0)
-    elif count <= 2:
-        d = count / 2
-        return (1-d, d)
-    else:
-        return (0.0, 1.0)
+                for square in piece.get_moves(board):
+                    if square in CENTER:
+                        controlled.add(square)
+    return float(len(controlled))
 
 
-# ──────────────────────────────────────────────
-# Move scorer using fuzzy rules
-# ──────────────────────────────────────────────
+def fuzzy_material_sets(value):
+    return {
+        "disadvantaged": trapezoidal(value, -17, -17, -6, -1),
+        "balanced": triangular(value, -3, 0, 3),
+        "advantaged": trapezoidal(value, 1, 6, 17, 17),
+    }
+
+
+def fuzzy_king_danger_sets(value):
+    return {
+        "safe": trapezoidal(value, 0, 0, 0.5, 1.5),
+        "warning": triangular(value, 1, 2, 3),
+        "exposed": trapezoidal(value, 2.5, 3.5, 6, 6),
+    }
+
+
+def fuzzy_center_sets(value):
+    return {
+        "weak": trapezoidal(value, 0, 0, 0.5, 1.5),
+        "moderate": triangular(value, 1, 2, 3),
+        "strong": trapezoidal(value, 2.5, 3.5, 4, 4),
+    }
+
+
+def moved_piece_hanging(board, square, color):
+    opponent = "B" if color == "W" else "W"
+    return count_attackers(board, square, opponent) > 0 and count_attackers(board, square, color) == 0
+
+
+def move_features(board, piece, dest, color):
+    opponent = "B" if color == "W" else "W"
+    before_adv = material_advantage(board, color)
+    after_board = apply_move(board, piece, dest)
+    after_adv = material_advantage(after_board, color)
+
+    target = board[dest[0]][dest[1]]
+    capture_value = PIECE_VALUES.get(type(target), 0) if target is not None else 0
+    check = is_in_check(after_board, opponent)
+    mate = is_checkmate(after_board, opponent)
+    promotion = isinstance(piece, Pawn) and ((piece.color == "W" and dest[0] == 0) or (piece.color == "B" and dest[0] == 5))
+    hanging = moved_piece_hanging(after_board, dest, color)
+
+    return {
+        "board": after_board,
+        "pre_material_advantage": before_adv,
+        "post_material_advantage": after_adv,
+        "king_danger_index": king_danger_index(after_board, color),
+        "center_control_count": center_control_count(after_board, color),
+        "capture_value": capture_value,
+        "gives_check": check,
+        "gives_mate": mate,
+        "promotion": promotion,
+        "hanging": hanging,
+    }
+
+
+def sugeno_score(features):
+    material_sets = fuzzy_material_sets(features["post_material_advantage"])
+    king_sets = fuzzy_king_danger_sets(features["king_danger_index"])
+    center_sets = fuzzy_center_sets(features["center_control_count"])
+
+    rules = []
+
+    rules.append((king_sets["exposed"], VERY_BAD))
+    rules.append((min(king_sets["safe"], material_sets["advantaged"]), GOOD))
+    rules.append((min(material_sets["balanced"], center_sets["strong"]), GOOD))
+
+    if features["post_material_advantage"] > features["pre_material_advantage"]:
+        rules.append((material_sets["disadvantaged"], GOOD))
+
+    rules.append((min(king_sets["warning"], center_sets["weak"]), BAD))
+    rules.append((min(material_sets["advantaged"], center_sets["strong"]), EXCELLENT))
+    rules.append((min(material_sets["balanced"], king_sets["safe"]), NEUTRAL))
+    rules.append((min(material_sets["disadvantaged"], king_sets["safe"]), NEUTRAL))
+
+    numerator = 0.0
+    denominator = 0.0
+    for strength, singleton in rules:
+        if strength <= 0:
+            continue
+        numerator += strength * singleton
+        denominator += strength
+
+    if denominator == 0:
+        return NEUTRAL
+    return numerator / denominator
+
 
 def score_move(board, piece, dest, color):
-    """
-    Apply fuzzy inference to score a candidate move.
-    Higher score = better move.
-    """
-    opponent = 'B' if color == 'W' else 'W'
-    new_board = apply_move(board, piece, dest)
+    features = move_features(board, piece, dest, color)
+    score = sugeno_score(features)
 
-    mat_low, mat_med, mat_high = fuzzy_material_advantage(new_board, color)
-    king_safe, king_exposed = fuzzy_king_danger(new_board, color)
-    center_weak, center_strong = fuzzy_center_control(new_board, color)
+    if features["gives_check"]:
+        score += 8.0
+    if features["hanging"]:
+        score -= 12.0
+    if features["promotion"]:
+        score += 10.0
+    if features["capture_value"] > 0:
+        score += 2.0 * features["capture_value"]
+    if features["gives_mate"]:
+        score = 10000.0
 
-    score = 0.0
+    return score, features
 
-    # Rule 1: IF King Danger is High THEN prioritize defensive moves
-    # → heavy penalty if move leaves king exposed
-    score -= king_exposed * 5.0
 
-    # Rule 2: IF Material Advantage is High AND King is Safe THEN trade/simplify
-    # → reward captures
-    target = board[dest[0]][dest[1]]
-    if target is not None:
-        capture_values = {Queen: 9, Knight: 3, Pawn: 1, King: 100}
-        capture_val = capture_values.get(type(target), 0)
-        score += mat_high * 0.5 * capture_val   # trade when winning
-        score += mat_low  * 1.5 * capture_val   # desperately grab material when losing
-
-    # Rule 3: IF Center Control is Weak THEN favor moves increasing central presence
-    score += center_weak * center_strong * 2.0   # if weak, bonus for improving it
-
-    # Bonus: moving toward opponent's territory
-    if color == 'B':
-        score += dest[0] * 0.1
-    else:
-        score += (5 - dest[0]) * 0.1
-
-    # Bonus: checking the opponent
-    if is_in_check(new_board, opponent):
-        score += 3.0
-
-    # Bonus: checkmate
-    if is_checkmate(new_board, opponent):
-        score += 1000.0
-
-    return score
+def tie_break_key(dest, features):
+    return (
+        1 if features["gives_mate"] else 0,
+        1 if features["promotion"] else 0,
+        features["capture_value"],
+        1 if features["gives_check"] else 0,
+        -dest[1],
+        -(6 - dest[0]),
+    )
 
 
 class FuzzyPlayer:
-    def __init__(self, color='B'):
+    def __init__(self, color="B"):
         self.color = color
         self.name = "Fuzzy Logic"
 
@@ -160,15 +227,18 @@ class FuzzyPlayer:
         if not legal:
             return None
 
-        scored = []
+        best_entry = None
         for piece, dest in legal:
-            s = score_move(board, piece, dest, self.color)
-            scored.append((s, piece, dest))
+            score, features = score_move(board, piece, dest, self.color)
+            key = tie_break_key(dest, features)
+            entry = (score, key, piece, dest)
+            if best_entry is None:
+                best_entry = entry
+                continue
+            if score > best_entry[0]:
+                best_entry = entry
+                continue
+            if score == best_entry[0] and key > best_entry[1]:
+                best_entry = entry
 
-        scored.sort(key=lambda x: x[0], reverse=True)
-
-        # Pick from top 3 with slight randomness for variety
-        top_n = scored[:3]
-        weights = [3, 2, 1][:len(top_n)]
-        chosen = random.choices(top_n, weights=weights, k=1)[0]
-        return (chosen[1], chosen[2])
+        return (best_entry[2], best_entry[3])

@@ -66,8 +66,8 @@ def run_game():
     gui     = GUI()
 
     white   = MinimaxPlayer(color='W', depth=3)
-    #black   = MCTSPlayer(color='B', simulations=800)
-    black   = MinimaxPlayer(color='B', depth=3)
+    black   = MCTSPlayer(color='B', simulations=800)
+    #black   = MinimaxPlayer(color='B', depth=3)
     players = {'W': white, 'B': black}
 
     current  = 'W'
