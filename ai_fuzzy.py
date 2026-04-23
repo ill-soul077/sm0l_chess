@@ -1,6 +1,6 @@
 # ai_fuzzy.py - Formal Sugeno-style fuzzy logic player.
 
-from board import apply_move, get_legal_moves, is_checkmate, is_in_check
+from board import apply_move, get_legal_moves, is_checkmate, is_in_check, undo_move
 from pieces import King, Knight, Pawn, Queen
 
 PIECE_VALUES = {
@@ -132,28 +132,25 @@ def moved_piece_hanging(board, square, color):
 def move_features(board, piece, dest, color):
     opponent = "B" if color == "W" else "W"
     before_adv = material_advantage(board, color)
-    after_board = apply_move(board, piece, dest)
-    after_adv = material_advantage(after_board, color)
+    capture_target = board[dest[0]][dest[1]]
+    undo = apply_move(board, piece, dest)
 
-    target = board[dest[0]][dest[1]]
-    capture_value = PIECE_VALUES.get(type(target), 0) if target is not None else 0
-    check = is_in_check(after_board, opponent)
-    mate = is_checkmate(after_board, opponent)
+    check = is_in_check(board, opponent)
+    mate = is_checkmate(board, opponent)
     promotion = isinstance(piece, Pawn) and ((piece.color == "W" and dest[0] == 0) or (piece.color == "B" and dest[0] == 5))
-    hanging = moved_piece_hanging(after_board, dest, color)
-
-    return {
-        "board": after_board,
+    features = {
         "pre_material_advantage": before_adv,
-        "post_material_advantage": after_adv,
-        "king_danger_index": king_danger_index(after_board, color),
-        "center_control_count": center_control_count(after_board, color),
-        "capture_value": capture_value,
+        "post_material_advantage": material_advantage(board, color),
+        "king_danger_index": king_danger_index(board, color),
+        "center_control_count": center_control_count(board, color),
+        "capture_value": PIECE_VALUES.get(type(capture_target), 0) if capture_target is not None else 0,
         "gives_check": check,
         "gives_mate": mate,
         "promotion": promotion,
-        "hanging": hanging,
+        "hanging": moved_piece_hanging(board, dest, color),
     }
+    undo_move(board, undo)
+    return features
 
 
 def sugeno_score(features):
@@ -162,7 +159,6 @@ def sugeno_score(features):
     center_sets = fuzzy_center_sets(features["center_control_count"])
 
     rules = []
-
     rules.append((king_sets["exposed"], VERY_BAD))
     rules.append((min(king_sets["safe"], material_sets["advantaged"]), GOOD))
     rules.append((min(material_sets["balanced"], center_sets["strong"]), GOOD))

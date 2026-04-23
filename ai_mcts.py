@@ -1,12 +1,19 @@
 # ai_mcts.py - Monte Carlo Tree Search with move ordering, tree reuse,
 # and a rollout policy that prefers tactical, non-blundering moves.
 
-import copy
 import math
 import random
 import time
 
-from board import apply_move, get_legal_moves, is_checkmate, is_in_check, is_stalemate
+from board import (
+    apply_move,
+    copy_board,
+    get_legal_moves,
+    is_checkmate,
+    is_in_check,
+    is_stalemate,
+    undo_move,
+)
 from pieces import King, Knight, Pawn, Queen
 
 SIMULATIONS = 1000
@@ -36,6 +43,20 @@ def material_score(board, mcts_color):
     if total == 0:
         return 0.0
     return max(-1.0, min(1.0, (my_material - opp_material) / total))
+
+
+def move_key(piece, dest):
+    return ((piece.row, piece.col), dest)
+
+
+def translate_move(board, color, move):
+    if move is None:
+        return None
+    target_key = move_key(*move)
+    for legal_piece, legal_dest in get_legal_moves(board, color):
+        if move_key(legal_piece, legal_dest) == target_key:
+            return (legal_piece, legal_dest)
+    return None
 
 
 def is_square_attacked(board, square, by_color):
@@ -86,34 +107,33 @@ def find_immediate_checkmate(board, color):
     """Return a move causing immediate checkmate, or None."""
     opponent = "B" if color == "W" else "W"
     for piece, dest in get_legal_moves(board, color):
-        new_board = apply_move(board, piece, dest)
-        if is_checkmate(new_board, opponent):
+        undo = apply_move(board, piece, dest)
+        is_mate = is_checkmate(board, opponent)
+        undo_move(board, undo)
+        if is_mate:
             return (piece, dest)
     return None
-
-
-def is_move_defended(board, square, color):
-    return count_attackers(board, square, color) > 0
 
 
 def rollout_move_score(board, piece, dest, color):
     opponent = "B" if color == "W" else "W"
     before_material = material(board, color) - material(board, opponent)
-    new_board = apply_move(board, piece, dest)
-    moved_piece = new_board[dest[0]][dest[1]]
+    captured = board[dest[0]][dest[1]]
+    undo = apply_move(board, piece, dest)
+    moved_piece = board[dest[0]][dest[1]]
     score = 0.0
 
-    if is_checkmate(new_board, opponent):
+    if is_checkmate(board, opponent):
+        undo_move(board, undo)
         return 100000.0
 
     if isinstance(piece, Pawn) and ((piece.color == "W" and dest[0] == 0) or (piece.color == "B" and dest[0] == 5)):
         score += 350.0
 
-    captured = board[dest[0]][dest[1]]
     if captured is not None:
         score += 100.0 + PIECE_VALS.get(type(captured), 0) * 35.0
 
-    if is_in_check(new_board, opponent):
+    if is_in_check(board, opponent):
         score += 80.0
 
     if dest in CENTER:
@@ -122,8 +142,8 @@ def rollout_move_score(board, piece, dest, color):
     if isinstance(piece, Pawn):
         score += dest[0] * 4.0 if color == "B" else (5 - dest[0]) * 4.0
 
-    attackers = count_attackers(new_board, dest, opponent)
-    defenders = count_attackers(new_board, dest, color)
+    attackers = count_attackers(board, dest, opponent)
+    defenders = count_attackers(board, dest, color)
     if attackers > 0:
         hanging_penalty = 90.0 + PIECE_VALS.get(type(moved_piece), 0) * 20.0
         score -= hanging_penalty
@@ -132,22 +152,24 @@ def rollout_move_score(board, piece, dest, color):
         elif defenders < attackers:
             score -= 25.0
 
-    if is_in_check(new_board, color):
+    if is_in_check(board, color):
         score -= 250.0
 
     opponent_wins = 0
-    for opp_piece, opp_dest in get_legal_moves(new_board, opponent):
-        reply_board = apply_move(new_board, opp_piece, opp_dest)
-        if is_checkmate(reply_board, color):
+    for opp_piece, opp_dest in get_legal_moves(board, opponent):
+        reply_target = board[opp_dest[0]][opp_dest[1]]
+        reply_undo = apply_move(board, opp_piece, opp_dest)
+        if is_checkmate(board, color):
             opponent_wins += 1
-        reply_target = new_board[opp_dest[0]][opp_dest[1]]
         if reply_target is not None and PIECE_VALS.get(type(reply_target), 0) >= 3:
             score -= 40.0
+        undo_move(board, reply_undo)
     if opponent_wins:
         score -= 500.0
 
-    after_material = material(new_board, color) - material(new_board, opponent)
+    after_material = material(board, color) - material(board, opponent)
     score += (after_material - before_material) * 12.0
+    undo_move(board, undo)
     return score
 
 
@@ -210,7 +232,8 @@ class Node:
             self._init_untried()
         move = self.untried.pop()
         piece, dest = move
-        new_board = apply_move(self.board, piece, dest)
+        new_board = copy_board(self.board)
+        apply_move(new_board, piece, dest)
         opponent = "B" if self.color == "W" else "W"
         child = Node(new_board, opponent, parent=self, move=move)
         self.children.append(child)
@@ -242,7 +265,7 @@ def rollout(board, color, mcts_color):
         else:
             piece, dest = select_rollout_move(board, moves, current)
 
-        board = apply_move(board, piece, dest)
+        apply_move(board, piece, dest)
         current = opponent
 
     return material_score(board, mcts_color)
@@ -268,15 +291,16 @@ def mcts_search(board, color, n_simulations=SIMULATIONS, time_limit=TIME_LIMIT, 
     Run MCTS and return (best_move, root_node).
     Pass reuse_root from the previous call for tree reuse.
     """
-    instant_win = find_immediate_checkmate(board, color)
+    root_board = copy_board(board)
+    instant_win = find_immediate_checkmate(root_board, color)
     if instant_win:
-        return instant_win, None
+        return translate_move(board, color, instant_win), None
 
     root = None
     if reuse_root is not None:
         for child in reuse_root.children:
             for grandchild in child.children:
-                if _boards_equal(grandchild.board, board):
+                if _boards_equal(grandchild.board, root_board):
                     grandchild.parent = None
                     root = grandchild
                     break
@@ -284,7 +308,7 @@ def mcts_search(board, color, n_simulations=SIMULATIONS, time_limit=TIME_LIMIT, 
                 break
 
     if root is None:
-        root = Node(board, color)
+        root = Node(root_board, color)
 
     start = time.time()
     simulations = 0
@@ -298,7 +322,7 @@ def mcts_search(board, color, n_simulations=SIMULATIONS, time_limit=TIME_LIMIT, 
         if not node.is_terminal() and not node.is_fully_expanded():
             node = node.expand()
 
-        result = rollout(copy.deepcopy(node.board), node.color, color)
+        result = rollout(copy_board(node.board), node.color, color)
 
         current = node
         while current is not None:
@@ -312,12 +336,12 @@ def mcts_search(board, color, n_simulations=SIMULATIONS, time_limit=TIME_LIMIT, 
         simulations += 1
 
     if not root.children:
-        legal = get_legal_moves(board, color)
+        legal = get_legal_moves(root_board, color)
         fallback = random.choice(legal) if legal else None
-        return fallback, None
+        return translate_move(board, color, fallback), None
 
     best = root.best_child_visits()
-    return best.move, root
+    return translate_move(board, color, best.move), root
 
 
 class MCTSPlayer:

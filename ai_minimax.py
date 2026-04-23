@@ -4,7 +4,7 @@
 import math
 import random
 
-from board import apply_move, get_legal_moves, is_checkmate, is_in_check, is_stalemate
+from board import apply_move, get_legal_moves, is_checkmate, is_in_check, is_stalemate, undo_move
 from pieces import King, Knight, Pawn, Queen
 
 PIECE_VALUES = {
@@ -106,27 +106,28 @@ def zobrist_hash(board, side_to_move):
 
 def score_move(board, piece, dest, color):
     opponent = "B" if color == "W" else "W"
-    new_board = apply_move(board, piece, dest)
+    target = board[dest[0]][dest[1]]
+    undo = apply_move(board, piece, dest)
     score = 0.0
 
-    if is_checkmate(new_board, opponent):
+    if is_checkmate(board, opponent):
         score += 100000.0
 
     if isinstance(piece, Pawn) and ((piece.color == "W" and dest[0] == 0) or (piece.color == "B" and dest[0] == 5)):
         score += 2500.0
 
-    target = board[dest[0]][dest[1]]
     if target is not None:
         victim = PIECE_VALUES.get(type(target), 0)
         attacker = PIECE_VALUES.get(type(piece), 0)
         score += 400.0 + (victim * 20.0) - attacker
 
-    if is_in_check(new_board, opponent):
+    if is_in_check(board, opponent):
         score += 300.0
 
     if dest in CENTER:
         score += 25.0
 
+    undo_move(board, undo)
     return score
 
 
@@ -201,8 +202,9 @@ def minimax(board, depth, alpha, beta, maximizing, my_color, player, ply=0):
     if maximizing:
         best_score = -math.inf
         for piece, dest in legal:
-            new_board = apply_move(board, piece, dest)
-            score, _ = minimax(new_board, depth - 1, alpha, beta, False, my_color, player, ply + 1)
+            undo = apply_move(board, piece, dest)
+            score, _ = minimax(board, depth - 1, alpha, beta, False, my_color, player, ply + 1)
+            undo_move(board, undo)
             if score > best_score:
                 best_score = score
                 best_move = (piece, dest)
@@ -213,8 +215,9 @@ def minimax(board, depth, alpha, beta, maximizing, my_color, player, ply=0):
     else:
         best_score = math.inf
         for piece, dest in legal:
-            new_board = apply_move(board, piece, dest)
-            score, _ = minimax(new_board, depth - 1, alpha, beta, True, my_color, player, ply + 1)
+            undo = apply_move(board, piece, dest)
+            score, _ = minimax(board, depth - 1, alpha, beta, True, my_color, player, ply + 1)
+            undo_move(board, undo)
             if score < best_score:
                 best_score = score
                 best_move = (piece, dest)
