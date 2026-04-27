@@ -11,9 +11,9 @@ from board import (
     get_legal_moves,
     is_checkmate,
     is_in_check,
-    is_stalemate,
     undo_move,
 )
+from game_rules import advance_context_after_move, copy_draw_context, draw_reason
 from pieces import King, Knight, Pawn, Queen
 
 SIMULATIONS = 1000
@@ -191,11 +191,12 @@ def select_rollout_move(board, moves, color):
 
 
 class Node:
-    __slots__ = ("board", "color", "parent", "move", "wins", "visits", "children", "untried")
+    __slots__ = ("board", "color", "context", "parent", "move", "wins", "visits", "children", "untried")
 
-    def __init__(self, board, color, parent=None, move=None):
+    def __init__(self, board, color, context=None, parent=None, move=None):
         self.board = board
         self.color = color
+        self.context = context
         self.parent = parent
         self.move = move
         self.wins = 0.0
@@ -209,7 +210,7 @@ class Node:
         self.untried = moves
 
     def is_terminal(self):
-        return is_checkmate(self.board, self.color) or is_stalemate(self.board, self.color)
+        return is_checkmate(self.board, self.color) or draw_reason(self.board, self.color, self.context)
 
     def is_fully_expanded(self):
         if self.untried is None:
@@ -227,45 +228,74 @@ class Node:
     def best_child_visits(self):
         return max(self.children, key=lambda child: child.visits)
 
+    def best_child_value(self):
+        return max(
+            self.children,
+            key=lambda child: (
+                child.wins / child.visits if child.visits else -float("inf"),
+                child.visits,
+            ),
+        )
+
     def expand(self):
         if self.untried is None:
             self._init_untried()
         move = self.untried.pop()
         piece, dest = move
+        captured = self.board[dest[0]][dest[1]]
+        moved_was_pawn = isinstance(piece, Pawn)
         new_board = copy_board(self.board)
         apply_move(new_board, piece, dest)
         opponent = "B" if self.color == "W" else "W"
-        child = Node(new_board, opponent, parent=self, move=move)
+        child_context = advance_context_after_move(
+            self.context,
+            new_board,
+            opponent,
+            moved_was_pawn,
+            captured,
+        )
+        child = Node(new_board, opponent, context=child_context, parent=self, move=move)
         self.children.append(child)
         return child
 
 
-def rollout(board, color, mcts_color):
+def rollout(board, color, mcts_color, draw_context=None, deadline=None):
     current = color
+    context = copy_draw_context(draw_context)
 
     for _ in range(MAX_ROLLOUT):
+        if deadline is not None and time.monotonic() >= deadline:
+            return material_score(board, mcts_color)
+
         opponent = "B" if current == "W" else "W"
 
         if is_checkmate(board, current):
             winner = opponent
             return 1.0 if winner == mcts_color else -1.0
 
-        if is_stalemate(board, current):
-            score = material_score(board, mcts_color)
-            return -0.3 if score > 0.2 else 0.0
+        if draw_reason(board, current, context):
+            return 0.0
 
         moves = get_legal_moves(board, current)
         if not moves:
-            score = material_score(board, mcts_color)
-            return -0.3 if score > 0.2 else 0.0
+            return 0.0
 
-        forced_mate = find_immediate_checkmate(board, current)
+        forced_mate = None if deadline is not None and time.monotonic() >= deadline else find_immediate_checkmate(board, current)
         if forced_mate is not None:
             piece, dest = forced_mate
         else:
             piece, dest = select_rollout_move(board, moves, current)
 
+        captured = board[dest[0]][dest[1]]
+        moved_was_pawn = isinstance(piece, Pawn)
         apply_move(board, piece, dest)
+        context = advance_context_after_move(
+            context,
+            board,
+            opponent,
+            moved_was_pawn,
+            captured,
+        )
         current = opponent
 
     return material_score(board, mcts_color)
@@ -286,18 +316,20 @@ def _boards_equal(board_a, board_b):
     return True
 
 
-def mcts_search(board, color, n_simulations=SIMULATIONS, time_limit=TIME_LIMIT, reuse_root=None):
+def mcts_search(board, color, n_simulations=SIMULATIONS, time_limit=TIME_LIMIT, reuse_root=None, draw_context=None):
     """
     Run MCTS and return (best_move, root_node).
     Pass reuse_root from the previous call for tree reuse.
     """
+    start = time.monotonic()
+    deadline = start + time_limit
     root_board = copy_board(board)
-    instant_win = find_immediate_checkmate(root_board, color)
+    instant_win = None if time_limit <= 0.75 else find_immediate_checkmate(root_board, color)
     if instant_win:
         return translate_move(board, color, instant_win), None
 
     root = None
-    if reuse_root is not None:
+    if reuse_root is not None and draw_context is None:
         for child in reuse_root.children:
             for grandchild in child.children:
                 if _boards_equal(grandchild.board, root_board):
@@ -308,21 +340,22 @@ def mcts_search(board, color, n_simulations=SIMULATIONS, time_limit=TIME_LIMIT, 
                 break
 
     if root is None:
-        root = Node(root_board, color)
+        root = Node(root_board, color, context=copy_draw_context(draw_context))
 
-    start = time.time()
     simulations = 0
 
-    while simulations < n_simulations and (time.time() - start) < time_limit:
+    while simulations < n_simulations and time.monotonic() < deadline:
         node = root
 
         while not node.is_terminal() and node.is_fully_expanded():
+            if time.monotonic() >= deadline:
+                break
             node = node.best_child_ucb()
 
-        if not node.is_terminal() and not node.is_fully_expanded():
+        if time.monotonic() < deadline and not node.is_terminal() and not node.is_fully_expanded():
             node = node.expand()
 
-        result = rollout(copy_board(node.board), node.color, color)
+        result = rollout(copy_board(node.board), node.color, color, node.context, deadline=deadline)
 
         current = node
         while current is not None:
@@ -340,23 +373,26 @@ def mcts_search(board, color, n_simulations=SIMULATIONS, time_limit=TIME_LIMIT, 
         fallback = random.choice(legal) if legal else None
         return translate_move(board, color, fallback), None
 
-    best = root.best_child_visits()
+    best = root.best_child_value()
     return translate_move(board, color, best.move), root
 
 
 class MCTSPlayer:
-    def __init__(self, color="B", simulations=SIMULATIONS):
+    def __init__(self, color="B", simulations=SIMULATIONS, time_limit=TIME_LIMIT):
         self.color = color
         self.simulations = simulations
+        self.time_limit = time_limit
         self.name = f"MCTS+ ({simulations} sims)"
         self._root = None
 
-    def choose_move(self, board):
+    def choose_move(self, board, draw_context=None):
         move, new_root = mcts_search(
             board,
             self.color,
             n_simulations=self.simulations,
+            time_limit=self.time_limit,
             reuse_root=self._root,
+            draw_context=draw_context,
         )
-        self._root = new_root
+        self._root = None if draw_context is not None else new_root
         return move

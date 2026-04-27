@@ -83,6 +83,9 @@ def apply_move(board, piece, dest):
     r1, c1 = dest
 
     moving = board[r0][c0]
+    if moving is None:
+        raise ValueError(f"Cannot apply move from empty square {(r0, c0)} to {(r1, c1)}")
+
     captured = board[r1][c1]
     previous_has_moved = getattr(moving, "has_moved", None)
 

@@ -3,8 +3,10 @@
 
 import math
 import random
+import time
 
-from board import apply_move, get_legal_moves, is_checkmate, is_in_check, is_stalemate, undo_move
+from board import apply_move, get_legal_moves, is_checkmate, is_in_check, undo_move
+from game_rules import advance_context_after_move, draw_reason, opponent_of
 from pieces import King, Knight, Pawn, Queen
 
 PIECE_VALUES = {
@@ -19,6 +21,10 @@ TT_EXACT = "EXACT"
 TT_LOWERBOUND = "LOWERBOUND"
 TT_UPPERBOUND = "UPPERBOUND"
 ZOBRIST_SEED = 20260423
+
+
+class SearchTimeout(Exception):
+    pass
 
 
 def move_key(piece, dest):
@@ -104,6 +110,15 @@ def zobrist_hash(board, side_to_move):
     return h
 
 
+def draw_context_key(draw_context):
+    if draw_context is None:
+        return None
+    return (
+        draw_context.halfmove_clock,
+        tuple(sorted(draw_context.position_counts.items())),
+    )
+
+
 def score_move(board, piece, dest, color):
     opponent = "B" if color == "W" else "W"
     target = board[dest[0]][dest[1]]
@@ -144,29 +159,32 @@ def order_moves(board, legal_moves, color, preferred_move=None):
     return [(piece, dest) for _, _, _, _, _, piece, dest in ordered]
 
 
-def _terminal_score(board, current_color, maximizing):
+def _terminal_score(board, current_color, maximizing, draw_context=None):
     if is_checkmate(board, current_color):
         return (-math.inf if maximizing else math.inf), None
-    if is_stalemate(board, current_color):
+    if draw_reason(board, current_color, draw_context):
         return 0.0, None
     return None
 
 
-def minimax(board, depth, alpha, beta, maximizing, my_color, player, ply=0):
+def minimax(board, depth, alpha, beta, maximizing, my_color, player, ply=0, draw_context=None):
+    if player._deadline is not None and time.monotonic() >= player._deadline:
+        raise SearchTimeout
+
     player._stats["nodes"] += 1
     player._stats["max_depth"] = max(player._stats["max_depth"], ply)
 
-    opponent = "B" if my_color == "W" else "W"
+    opponent = opponent_of(my_color)
     current_color = my_color if maximizing else opponent
 
-    terminal = _terminal_score(board, current_color, maximizing)
+    terminal = _terminal_score(board, current_color, maximizing, draw_context)
     if terminal is not None:
         return terminal
 
     if depth == 0:
         return evaluate(board, my_color), None
 
-    board_hash = zobrist_hash(board, current_color)
+    board_hash = (zobrist_hash(board, current_color), draw_context_key(draw_context))
     original_alpha = alpha
     original_beta = beta
     tt_entry = player._tt.get(board_hash)
@@ -202,8 +220,27 @@ def minimax(board, depth, alpha, beta, maximizing, my_color, player, ply=0):
     if maximizing:
         best_score = -math.inf
         for piece, dest in legal:
+            captured = board[dest[0]][dest[1]]
+            moved_was_pawn = isinstance(piece, Pawn)
             undo = apply_move(board, piece, dest)
-            score, _ = minimax(board, depth - 1, alpha, beta, False, my_color, player, ply + 1)
+            next_context = advance_context_after_move(
+                draw_context,
+                board,
+                opponent_of(current_color),
+                moved_was_pawn,
+                captured,
+            )
+            score, _ = minimax(
+                board,
+                depth - 1,
+                alpha,
+                beta,
+                False,
+                my_color,
+                player,
+                ply + 1,
+                next_context,
+            )
             undo_move(board, undo)
             if score > best_score:
                 best_score = score
@@ -215,8 +252,27 @@ def minimax(board, depth, alpha, beta, maximizing, my_color, player, ply=0):
     else:
         best_score = math.inf
         for piece, dest in legal:
+            captured = board[dest[0]][dest[1]]
+            moved_was_pawn = isinstance(piece, Pawn)
             undo = apply_move(board, piece, dest)
-            score, _ = minimax(board, depth - 1, alpha, beta, True, my_color, player, ply + 1)
+            next_context = advance_context_after_move(
+                draw_context,
+                board,
+                opponent_of(current_color),
+                moved_was_pawn,
+                captured,
+            )
+            score, _ = minimax(
+                board,
+                depth - 1,
+                alpha,
+                beta,
+                True,
+                my_color,
+                player,
+                ply + 1,
+                next_context,
+            )
             undo_move(board, undo)
             if score < best_score:
                 best_score = score
@@ -245,17 +301,20 @@ def minimax(board, depth, alpha, beta, maximizing, my_color, player, ply=0):
 
 
 class MinimaxPlayer:
-    def __init__(self, color="W", depth=3):
+    def __init__(self, color="W", depth=3, time_limit=4.5):
         self.color = color
         self.depth = depth
+        self.time_limit = time_limit
         self.name = "Minimax (alpha-beta)"
         self.last_search_stats = {}
         self._tt = {}
         self._search_turn_id = 0
         self._stats = {}
+        self._deadline = None
 
-    def choose_move(self, board):
+    def choose_move(self, board, draw_context=None):
         self._search_turn_id += 1
+        self._deadline = None if self.time_limit is None else time.monotonic() + self.time_limit
         self._stats = {
             "nodes": 0,
             "cutoffs": 0,
@@ -263,6 +322,31 @@ class MinimaxPlayer:
             "tt_ordering_hits": 0,
             "max_depth": 0,
         }
-        _, best = minimax(board, self.depth, -math.inf, math.inf, True, self.color, self, ply=0)
+        best = None
+        try:
+            for depth in range(1, self.depth + 1):
+                _, candidate = minimax(
+                    board,
+                    depth,
+                    -math.inf,
+                    math.inf,
+                    True,
+                    self.color,
+                    self,
+                    ply=0,
+                    draw_context=draw_context,
+                )
+                if candidate is not None:
+                    best = candidate
+        except SearchTimeout:
+            pass
+        finally:
+            self._deadline = None
+
+        if best is None:
+            legal = get_legal_moves(board, self.color)
+            if legal:
+                best = order_moves(board, legal, self.color)[0]
+
         self.last_search_stats = dict(self._stats)
         return best

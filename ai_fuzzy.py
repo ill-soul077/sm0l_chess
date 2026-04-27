@@ -1,6 +1,7 @@
 # ai_fuzzy.py - Formal Sugeno-style fuzzy logic player.
 
 from board import apply_move, get_legal_moves, is_checkmate, is_in_check, undo_move
+from game_rules import draw_reason_after_move
 from pieces import King, Knight, Pawn, Queen
 
 PIECE_VALUES = {
@@ -129,10 +130,11 @@ def moved_piece_hanging(board, square, color):
     return count_attackers(board, square, opponent) > 0 and count_attackers(board, square, color) == 0
 
 
-def move_features(board, piece, dest, color):
+def move_features(board, piece, dest, color, draw_context=None):
     opponent = "B" if color == "W" else "W"
     before_adv = material_advantage(board, color)
     capture_target = board[dest[0]][dest[1]]
+    immediate_draw = draw_reason_after_move(board, piece, dest, color, draw_context)
     undo = apply_move(board, piece, dest)
 
     check = is_in_check(board, opponent)
@@ -148,6 +150,7 @@ def move_features(board, piece, dest, color):
         "gives_mate": mate,
         "promotion": promotion,
         "hanging": moved_piece_hanging(board, dest, color),
+        "draw_reason": immediate_draw,
     }
     undo_move(board, undo)
     return features
@@ -184,18 +187,25 @@ def sugeno_score(features):
     return numerator / denominator
 
 
-def score_move(board, piece, dest, color):
-    features = move_features(board, piece, dest, color)
+def score_move(board, piece, dest, color, draw_context=None):
+    features = move_features(board, piece, dest, color, draw_context)
     score = sugeno_score(features)
 
-    if features["gives_check"]:
-        score += 8.0
-    if features["hanging"]:
-        score -= 12.0
-    if features["promotion"]:
-        score += 10.0
-    if features["capture_value"] > 0:
-        score += 2.0 * features["capture_value"]
+    if features["draw_reason"]:
+        advantage = features["post_material_advantage"]
+        score = NEUTRAL
+        score += min(35.0, max(0.0, -advantage) * 5.0)
+        score -= min(35.0, max(0.0, advantage) * 5.0)
+    else:
+        if features["gives_check"]:
+            score += 8.0
+        if features["hanging"]:
+            score -= 12.0
+        if features["promotion"]:
+            score += 10.0
+        if features["capture_value"] > 0:
+            score += 2.0 * features["capture_value"]
+
     if features["gives_mate"]:
         score = 10000.0
 
@@ -218,14 +228,14 @@ class FuzzyPlayer:
         self.color = color
         self.name = "Fuzzy Logic"
 
-    def choose_move(self, board):
+    def choose_move(self, board, draw_context=None):
         legal = get_legal_moves(board, self.color)
         if not legal:
             return None
 
         best_entry = None
         for piece, dest in legal:
-            score, features = score_move(board, piece, dest, self.color)
+            score, features = score_move(board, piece, dest, self.color, draw_context)
             key = tie_break_key(dest, features)
             entry = (score, key, piece, dest)
             if best_entry is None:

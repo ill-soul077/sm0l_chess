@@ -1,150 +1,120 @@
 # SmoL Chess AI Project
 
-SmoL Chess is a custom 6x6 mini-chess project built in Python with a Pygame interface. The project focuses on implementing a small chess variant and comparing different AI decision-making approaches on the same ruleset.
+SmoL Chess is a custom 6x6 chess-variant project written in Python. It includes a complete board engine, a Pygame graphical interface, human play, and three different AI approaches: Minimax, Monte Carlo Tree Search, and Fuzzy Logic.
 
-The repository currently contains:
+The project is designed as both a playable mini-chess demo and an academic comparison of different AI decision-making methods on the same simplified rule set.
 
-- A complete 6x6 board representation
-- Piece movement logic for King, Queen, Knight, and Pawn
+## Features
+
+- Custom 6x6 chess-like board
+- Four piece types: King, Queen, Knight, and Pawn
 - Legal move generation with self-check prevention
-- Check, checkmate, and stalemate detection
-- Pawn promotion
-- Three AI approaches:
+- Check, checkmate, stalemate, threefold repetition, 50-move rule, insufficient-material draw, and move-limit draw
+- Pawn first-move double advance
+- Automatic pawn promotion to Queen
+- Human vs AI, Human vs Human, and AI vs AI matchups
+- Start menu for choosing White and Black players
+- AI max-think-time slider
+- Pygame GUI with board coordinates, sprites, highlights, move log, and winner overlay
+- Scrollable newest-first move log
+- Stale AI move protection when a timed-out AI returns an outdated move
+- Three AI players:
   - Minimax with alpha-beta pruning
-  - Monte Carlo Tree Search (MCTS)
-  - Fuzzy Logic move selection
-- A graphical Pygame interface for watching AI vs AI matches
+  - Monte Carlo Tree Search
+  - Fuzzy Logic rule-based player
 
-## Project Goal
+## How To Run
 
-The main goal of the project is to build a simplified chess environment and test different artificial intelligence methods on the same game:
+The project uses Python and Pygame. On the current Python 3.14 setup, `pygame-ce` is recommended because the regular `pygame` wheel can have font issues.
 
-- Search-based AI using Minimax
-- Simulation-based AI using MCTS
-- Rule-based AI using Fuzzy Logic
+Create and activate a virtual environment:
 
-This makes the project useful both as:
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+```
 
-- a game AI implementation project
-- an academic comparison project
-- a visual demo of different AI strategies
+Install the dependency:
 
-## What Has Been Done So Far
+```bash
+pip install pygame-ce
+```
 
-The current codebase already implements the following major work:
+Run the game:
 
-1. Designed a custom 6x6 chess variant instead of standard 8x8 chess.
-2. Created the internal board as a 6x6 matrix containing piece objects or empty squares.
-3. Implemented piece classes in `pieces.py`.
-4. Added movement logic for:
-   - King
-   - Queen
-   - Knight
-   - Pawn
-5. Implemented pawn first-move logic with optional 2-square advance.
-6. Implemented diagonal pawn captures.
-7. Implemented automatic pawn promotion to Queen.
-8. Added board copy-based move application logic in `board.py`.
-9. Added legal move filtering so a move is only allowed if it does not leave the moving side in check.
-10. Added king detection and check detection.
-11. Added checkmate detection.
-12. Added stalemate detection.
-13. Built a Minimax AI with:
-    - depth-limited search
-    - alpha-beta pruning
-    - evaluation based on material, mobility, center control, and king safety
-14. Built an MCTS AI with:
-    - simulation rollouts
-    - move ordering
-    - immediate checkmate detection
-    - tree reuse
-    - continuous scoring during backpropagation
-15. Built a Fuzzy Logic AI with:
-    - fuzzy material evaluation
-    - fuzzy king danger evaluation
-    - fuzzy center control evaluation
-    - rule-based candidate move scoring
-16. Built a Pygame GUI with:
-    - chessboard rendering
-    - coordinate labels
-    - move log panel
-    - winner overlay
-    - last move highlight
-    - check highlight
-    - piece sprite loading
-    - Unicode fallback if sprites are missing
-    - lightweight piece animation
-17. Added threaded AI move calculation so the GUI remains responsive while an AI is thinking.
-18. Added a live thinking indicator and a short countdown after each move for spectators.
-19. Added piece image assets in `assets/pieces/`.
-20. Added a project report PDF in the repository.
+```bash
+python main.py
+```
 
-## Current Run Configuration
+If you are not activating the virtual environment, run:
 
-The repository contains three AI agents, but the current default game setup in `main.py` is:
-
-- White: `MinimaxPlayer(color='W', depth=3)`
-- Black: `MinimaxPlayer(color='B', depth=3)`
-
-Important note:
-
-- `ai_mcts.py` is implemented and imported, but the active MCTS line in `main.py` is commented out.
-- `ai_fuzzy.py` is implemented, but the Fuzzy player is not currently connected to the default game loop.
-
-So at the moment, the project code supports three AI approaches, but the default executable match is currently Minimax vs Minimax.
+```bash
+.venv/bin/python main.py
+```
 
 ## Project Structure
 
-- `main.py`
-  - Starts the game
-  - Creates the board
-  - Chooses the players
-  - Runs the turn-by-turn game loop
-  - Handles AI threads and match flow
-- `board.py`
-  - Creates the initial board
-  - Applies moves on a copied board
-  - Finds kings
-  - Detects check, checkmate, and stalemate
-  - Produces legal moves
-- `pieces.py`
-  - Defines the base `Piece` class
-  - Defines `King`, `Queen`, `Knight`, and `Pawn`
-  - Implements the move rules for each piece
-- `ai_minimax.py`
-  - Implements evaluation scoring
-  - Implements Minimax search with alpha-beta pruning
-- `ai_mcts.py`
-  - Implements MCTS node expansion
-  - Implements rollout policy
-  - Implements search and tree reuse
-- `ai_fuzzy.py`
-  - Implements fuzzy heuristics
-  - Scores candidate moves using rule-based logic
-- `gui.py`
-  - Draws the board and side panel
-  - Loads and renders sprites
-  - Draws highlights and animations
-  - Shows match results
-- `assets/pieces/`
-  - Contains PNG piece images for both white and black pieces
-- `2107065_2107077.pdf`
-  - Project report file included in the repository
+```text
+sm0l_chess/
+├── main.py                  Main game loop, player selection, AI threading
+├── gui.py                   Pygame GUI, menu, board rendering, side panel, logs
+├── board.py                 Board state, legal moves, check/checkmate/stalemate
+├── pieces.py                Piece classes and movement rules
+├── game_rules.py            Match-level draw rules and repetition tracking
+├── ai_minimax.py            Minimax AI with alpha-beta pruning
+├── ai_mcts.py               Monte Carlo Tree Search AI
+├── ai_fuzzy.py              Fuzzy Logic AI
+├── assets/
+│   ├── pieces/              Piece PNG sprites
+│   └── ui/                  UI texture assets
+└── 2107065_2107077.pdf      Project report
+```
+
+## Running A Match
+
+When the program starts, the menu lets you choose both players:
+
+- `Human`
+- `Minimax`
+- `MCTS`
+- `Fuzzy Logic`
+
+The current default setup is:
+
+- White: Human
+- Black: MCTS
+
+The menu also includes an AI max-think-time slider. This limits the amount of time search-based AI players are allowed to spend on a move. MCTS and Minimax both cooperate with the time limit. If an AI still returns late or returns a stale move from an old board copy, the main loop validates the move against the current legal moves and uses a legal fallback instead of crashing.
+
+## Human Controls
+
+For a human turn:
+
+1. Click one of your pieces.
+2. Legal target squares are highlighted.
+3. Click a highlighted square to move.
+
+Other controls:
+
+- Close the window to quit.
+- Use the mouse wheel over the move-log panel to scroll through older logs.
+- The newest log entries appear at the top.
 
 ## Game Rules
 
-This project does not use full standard chess. It uses a simplified custom variant.
+SmoL Chess is not standard chess. It is a small custom variant built for easier AI experimentation.
 
-### Board Size
+### Board
 
-- The board is `6 x 6`.
-- Rows are indexed from `0` to `5`.
-- Columns are indexed from `0` to `5`.
-- The GUI labels columns as `a` to `f`.
+- The board is 6x6.
+- Rows are indexed internally from `0` to `5`.
+- Columns are indexed internally from `0` to `5`.
+- The GUI labels files as `a` to `f`.
+- The GUI labels ranks as `1` to `6`.
 
-### Pieces Used
+### Pieces
 
-Each side has 6 pieces:
+Each side starts with:
 
 - 1 King
 - 1 Queen
@@ -158,9 +128,7 @@ There are no:
 - Castling
 - En passant
 
-### Initial Board Setup
-
-All pieces start in a single back row for each side.
+### Initial Position
 
 Black starts on row `0`:
 
@@ -174,334 +142,309 @@ White starts on row `5`:
 Pawn  Knight  Queen  King  Knight  Pawn
 ```
 
-Rows `1` to `4` are empty at the beginning.
+Rows `1` through `4` are empty at the start.
 
-### Piece Movement Rules
+### King
 
-#### King
+The King moves one square in any direction and captures normally.
 
-- Moves one square in any direction.
-- Can capture opponent pieces normally.
+### Queen
 
-#### Queen
+The Queen is range-limited:
 
-- This is a range-limited queen, not a full standard chess queen.
-- It can move in any of the 8 directions:
-  - horizontal
-  - vertical
-  - diagonal
-- It can move up to 2 squares only.
+- It moves horizontally, vertically, or diagonally.
+- It can move at most 2 squares.
 - It cannot jump over pieces.
 
-#### Knight
+This makes the Queen weaker than a standard chess Queen and keeps the small board from becoming too tactical too quickly.
 
-- Moves in the usual L-shape:
-  - 2 squares in one direction and 1 square perpendicular
+### Knight
+
+The Knight moves like a normal chess Knight:
+
+- Two squares in one direction and one square perpendicular.
 - It can jump over other pieces.
 
-#### Pawn
+### Pawn
 
-- White pawns move upward toward row `0`.
-- Black pawns move downward toward row `5`.
-- A pawn can move:
-  - 1 square forward normally
-  - 2 squares forward on its first move if the path is clear
-- A pawn captures diagonally forward.
-- When a pawn reaches the last row, it is promoted automatically to a Queen.
+White pawns move toward row `0`. Black pawns move toward row `5`.
 
-### Legal Move Rule
+Pawns can:
 
-- A move is only legal if it does not leave the moving side's king in check.
-- The game computes legal moves by generating candidate moves and filtering out moves that expose the king.
+- Move 1 square forward if empty.
+- Move 2 squares forward on their first move if both squares are clear.
+- Capture diagonally forward.
+- Promote automatically to a Queen on the final row.
+
+### Legal Moves
+
+A move is legal only if it does not leave the moving side's King in check.
+
+The board engine generates pseudo-legal moves from the pieces, applies them temporarily, checks whether the King remains safe, and only keeps legal moves.
 
 ### Check
 
-- A king is in check if an opponent piece can attack its square.
+A King is in check if any opponent piece attacks the King's square.
 
 ### Checkmate
 
-- A side is in checkmate if:
-  - its king is in check
-  - it has no legal move to escape
+A side is checkmated when:
+
+- Its King is in check.
+- It has no legal move that removes the check.
 
 ### Stalemate
 
-- A side is in stalemate if:
-  - its king is not in check
-  - it has no legal move
+A side is stalemated when:
 
-### Draw by Move Limit
+- Its King is not in check.
+- It has no legal move.
 
-- The game also declares a draw after a fixed move limit in `main.py`.
-- The current value is `MAX_MOVES = 200` half-moves.
+### Draw Rules
 
-## AI Implementations
+The project includes several draw rules inspired by common chess rules:
 
-### 1. Minimax AI
+- Stalemate
+- Threefold repetition
+- 50-move rule
+- Insufficient material
+- Fixed move limit
 
-The Minimax player is implemented in `ai_minimax.py`.
+The fixed move limit is controlled by `MAX_MOVES = 200` in `main.py`.
 
-Current characteristics:
+Threefold repetition and the 50-move rule are tracked in `game_rules.py`. The position key includes:
 
-- Uses depth-limited recursive search
-- Uses alpha-beta pruning to reduce unnecessary search
-- Evaluates positions using:
-  - material balance
-  - mobility
-  - center occupancy
-  - king safety
+- Side to move
+- Piece type
+- Piece color
+- Piece square
+- Pawn first-move state
 
-Strengths:
+Pawn first-move state matters because it changes whether a 2-square pawn move is legal.
 
-- Deterministic and easy to explain
-- Good for tactical search in smaller game trees
-- Good baseline AI for comparison
+## AI Players
 
-Limitations:
+All AI players expose a `choose_move(board, draw_context=None)` method. The main loop runs AI calculations in a background thread so the GUI can keep updating.
 
-- Gets slower as depth increases
-- Recomputes many board states repeatedly
-- Uses a relatively simple evaluation function
+The main loop always validates the returned move against the current live board before applying it. This is important because AI players search on copied boards, and a timed-out thread can otherwise return a move that no longer matches the current board.
 
-### 2. MCTS AI
+### Minimax AI
 
-The MCTS player is implemented in `ai_mcts.py`.
+File: `ai_minimax.py`
 
-Current characteristics:
+The Minimax player uses depth-limited adversarial search with alpha-beta pruning.
 
-- Uses repeated simulations from candidate positions
-- Uses UCB1 for node selection
-- Uses move ordering to prefer promising expansions
-- Includes immediate checkmate detection
-- Includes tree reuse between turns
-- Uses rollout scoring based on material balance when needed
+Main ideas:
 
-Strengths:
+- Search alternates between maximizing the AI score and minimizing the opponent score.
+- Alpha-beta pruning skips branches that cannot affect the final decision.
+- Iterative deepening is used so a valid move is available if the time limit is reached.
+- A transposition table stores searched board states during a search.
+- Draw positions evaluate as `0`.
+- Checkmate dominates all heuristic scores.
 
-- Flexible and useful for uncertain positions
-- Can improve with more simulations
-- Good research-oriented comparison against Minimax
+Evaluation considers:
 
-Limitations:
+- Material balance
+- Legal move mobility
+- Center control
+- King safety
 
-- Slower than the current Fuzzy player
-- More complex to tune
-- The search still depends on copy-heavy board handling
+The AI prefers:
 
-### 3. Fuzzy Logic AI
+```text
+win > advantage > draw > disadvantage > loss
+```
 
-The Fuzzy Logic player is implemented in `ai_fuzzy.py`.
+This means it avoids draws when winning, but it prefers a draw over losing.
 
-Current characteristics:
+### MCTS AI
 
-- Uses fuzzy membership functions for:
-  - material advantage
-  - king danger
-  - center control
-- Scores each legal move using fuzzy-inspired rules
-- Chooses from the top few moves with slight randomness
+File: `ai_mcts.py`
 
-Strengths:
+The MCTS player uses Monte Carlo Tree Search.
 
-- Very fast
-- Easy to experiment with heuristics
-- Good for demonstrating rule-based AI ideas
+Main ideas:
 
-Limitations:
+- Build a search tree of possible moves.
+- Select promising nodes using UCB1.
+- Expand unexplored moves.
+- Simulate rollouts from those positions.
+- Backpropagate results through the tree.
 
-- Less rigorous than search-based methods
-- Depends heavily on manually chosen scoring rules
-- Not currently connected to the default match loop
+The implementation includes:
 
-## GUI Features
+- UCB1 node selection
+- Move ordering for expansion
+- Tactical rollout scoring
+- Immediate checkmate detection
+- Time-limited search
+- Draw-aware rollouts
+- Tree reuse when possible
 
-The Pygame interface in `gui.py` currently includes:
+Rollouts return:
 
-- 6x6 board display
-- Right-side information panel
-- Piece sprites loaded from `assets/pieces/`
-- Unicode chess piece fallback if sprites are unavailable
-- Move log display
+- `1.0` for a win
+- `0.0` for a draw
+- `-1.0` for a loss
+- Material-based scores for unfinished rollouts
+
+MCTS also treats draws as better than losses but worse than wins.
+
+### Fuzzy Logic AI
+
+File: `ai_fuzzy.py`
+
+The Fuzzy Logic player scores each legal move using rule-based fuzzy-inspired heuristics.
+
+It evaluates:
+
+- Material advantage
+- King danger
+- Center control
+- Captures
+- Checks
+- Checkmates
+- Promotions
+- Whether the moved piece becomes hanging
+- Whether a move immediately causes a draw
+
+The fuzzy player is much faster than search-based players. It does not search deeply, so it is less tactically precise, but it is useful for comparing rule-based decision-making against Minimax and MCTS.
+
+## GUI
+
+File: `gui.py`
+
+The GUI is built with Pygame.
+
+It includes:
+
+- Start menu with player selection
+- AI max-think-time slider
+- 6x6 board rendering
+- Piece sprites from `assets/pieces/`
 - Board coordinates
 - Last move highlighting
-- King-in-check highlighting
-- Thinking animation while AI is calculating
-- Winner screen at the end of the game
-- Short move animation for piece movement
+- Check highlighting
+- Human legal-move highlights
+- Right-side wooden information panel
+- Player cards
+- Current status card
+- Scrollable move log
+- Winner overlay
+- Basic move animation
 
-## How To Run
+The window uses the native operating-system title bar. Earlier custom title-bar experiments were removed because moving a borderless Pygame window was unreliable on this environment.
 
-### Requirements
+## Important Implementation Details
 
-- Python 3
-- `pygame`
+### Board Representation
 
-### Install Dependency
-
-```bash
-pip install pygame
-```
-
-### Run The Game
-
-```bash
-python main.py
-```
-
-## How To Switch AI Players
-
-Right now, player selection is hardcoded in `main.py`.
-
-Example current section:
+The board is a 6x6 list of lists:
 
 ```python
-white = MinimaxPlayer(color='W', depth=3)
-# black = MCTSPlayer(color='B', simulations=800)
-black = MinimaxPlayer(color='B', depth=3)
+board[row][col]
 ```
 
-You can manually change this block to test different matchups, for example:
+Each square contains either:
 
-### Minimax vs MCTS
+- `None`
+- a `Piece` object
+
+Piece objects store:
+
+- `color`
+- `row`
+- `col`
+- `symbol`
+
+Pawns also store:
+
+- `has_moved`
+
+### Applying And Undoing Moves
+
+`board.py` provides:
+
+- `apply_move(board, piece, dest)`
+- `undo_move(board, undo_token)`
+
+`apply_move` mutates the board and returns an undo token. This lets legal-move generation and AI search test moves efficiently without rebuilding every detail manually.
+
+### Copying Boards
+
+AI search uses copied boards so it can explore future positions without changing the live game. The function `copy_board(board)` creates independent piece objects, including pawn `has_moved` state.
+
+### Stale Move Protection
+
+AI threads search on board copies. When an AI time limit is very short, the main loop may use a fallback move while the AI thread finishes later. To avoid stale moves causing crashes, `main.py` resolves every AI move back to the current board using:
 
 ```python
-white = MinimaxPlayer(color='W', depth=3)
-black = MCTSPlayer(color='B', simulations=800)
+resolve_current_legal_move(board, color, move)
 ```
 
-### Minimax vs Fuzzy
+If the move no longer exists as a current legal move, the game logs the issue and chooses a legal fallback.
 
-```python
-from ai_fuzzy import FuzzyPlayer
+## Assets
 
-white = MinimaxPlayer(color='W', depth=3)
-black = FuzzyPlayer(color='B')
+Piece sprites are stored in:
+
+```text
+assets/pieces/
 ```
 
-### MCTS vs Fuzzy
+Expected files:
 
-```python
-from ai_fuzzy import FuzzyPlayer
-
-white = MCTSPlayer(color='W', simulations=800)
-black = FuzzyPlayer(color='B')
+```text
+wk.png  wq.png  wn.png  wp.png
+bk.png  bq.png  bn.png  bp.png
 ```
 
-## Known Limitations
+UI texture assets are stored in:
 
-The project is functional, but there are still several limitations:
+```text
+assets/ui/
+```
 
-- No automated tests are included
-- No `requirements.txt` file is included
-- No `.gitignore` file is included
-- The GUI labels do not always match the actual player setup
-- The main window title still mentions Fuzzy Logic even when Fuzzy is not playing
-- The side panel text currently mentions MCTS even when MCTS is not active
-- Fuzzy Logic AI is present in the repo but not connected to the default run path
-- Many configuration values are hardcoded
-- The board logic uses deep copies frequently, which can become expensive
-- There is no command-line configuration
-- There is no save/load feature
-- There is no human vs AI mode yet
-- There is no tournament or batch evaluation system yet
+## Configuration
 
-## Things That Can Be Improved
+Main constants:
 
-The following improvements would make the project stronger technically and easier to present:
+- `MAX_MOVES = 200` in `main.py`
+- `MOVE_DELAY_SEC = 0.25` in `main.py`
+- Default Minimax depth: `3`
+- Default MCTS simulations from `main.py`: `800`
+- MCTS module default simulations: `1000`
+- MCTS module default time limit: `4.5`
+- GUI AI time slider range: `0.5s` to `10.0s`
 
-### Documentation And Project Hygiene
+Draw constants in `game_rules.py`:
 
-- Add a `requirements.txt` file
-- Add a `.gitignore` file to exclude `__pycache__` and other generated files
-- Add docstrings consistently across all files
-- Keep comments and GUI labels synchronized with the current code
-- Document how to compare AI results formally
+- `THREEFOLD_REPETITION_COUNT = 3`
+- `FIFTY_MOVE_HALFMOVES = 100`
 
-### Code Structure
+## Current Limitations
 
-- Move hardcoded constants into a central config file
-- Separate game rules, AI logic, and UI logic more cleanly
-- Add a shared utility module for repeated constants and helper functions
-- Reduce repeated logic across AI files
+- No automated test suite is included.
+- No tournament or batch evaluation mode is included.
+- No save/load feature is included.
+- AI strength is tuned for demonstration, not competitive play.
+- MCTS and Minimax still rely heavily on board copying.
+- The Fuzzy AI is fast but shallow.
+- The GUI is fixed-size.
 
-### Correctness And Reliability
+## Suggested Future Improvements
 
-- Add unit tests for each piece's movement rules
-- Add tests for check detection
-- Add tests for checkmate and stalemate
-- Add tests for pawn promotion
-- Add tests to verify that illegal self-check moves are rejected
-
-### AI Improvements
-
-- Add a player selection system instead of editing `main.py`
-- Add command-line options for:
-  - player type
-  - search depth
-  - number of simulations
-  - move delay
-- Improve Minimax with:
-  - move ordering
-  - transposition tables
-  - better evaluation tuning
-- Improve MCTS with:
-  - stronger rollout policy
-  - more efficient state reuse
-  - better board hashing
-- Improve Fuzzy Logic with:
-  - more formal membership functions
-  - more rules
-  - better calibration of scores
-
-### Performance Improvements
-
-- Replace full-board deep copies with faster move/unmove logic
-- Cache repeated evaluations when possible
-- Profile the slowest sections of the search
-- Benchmark AI move times and win rates
-
-### GUI Improvements
-
-- Show the actual active player names automatically
-- Add a start menu for selecting AI types
-- Add restart and pause controls
-- Add speed controls for faster experiments
-- Add a board reset option
-- Add on-screen statistics such as:
-  - move time
-  - current turn
-  - total moves
-  - AI type for each side
-
-### Feature Extensions
-
-- Add human vs AI mode
-- Add human vs human mode
-- Add AI vs AI tournament mode
-- Save match logs to text or CSV
-- Export results for analysis in the report
-- Add alternate board sizes or alternate rule sets if needed for future research
-
-## Suggested Improvement Priority
-
-If the project is being prepared for submission, demo, or further development, this is a practical order:
-
-1. Add `requirements.txt` and `.gitignore`.
-2. Connect all AI agents through one clean player-selection system.
-3. Make GUI labels reflect the actual selected players automatically.
-4. Add tests for rules and endgame conditions.
-5. Improve performance in board copying and search.
-6. Add benchmarking and result logging for AI comparison.
-7. Add extra features such as human play and tournament mode.
+- Add unit tests for movement, check, checkmate, stalemate, draw rules, and promotion.
+- Add command-line options for player types and AI settings.
+- Add match export to CSV or JSON for AI comparison.
+- Add tournament mode for repeated AI-vs-AI evaluation.
+- Add pause, restart, and rematch controls.
+- Add profiling and optimize board copying in search.
+- Tune AI evaluation weights using match results.
 
 ## Summary
 
-This project already has a solid foundation:
+SmoL Chess is a complete mini-chess AI playground. It includes a custom rule set, working board engine, human play, three AI strategies, draw-rule tracking, a graphical interface, and configurable AI thinking time.
 
-- the custom game rules are implemented
-- the board engine is working
-- three different AI approaches are implemented
-- the GUI can visualize automated matches
-
-The biggest remaining work is not building the core game from scratch anymore. The biggest remaining work is improving polish, consistency, testing, configurability, and evaluation so the project becomes easier to present, compare, and extend.
-
+The main educational value of the project is that Minimax, MCTS, and Fuzzy Logic all operate on the same game rules, making their behavior easier to compare and explain.
