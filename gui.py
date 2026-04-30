@@ -3,6 +3,7 @@
 import os
 import math
 import random
+from array import array
 
 import pygame
 
@@ -28,14 +29,20 @@ SHADOW = (0, 0, 0, 90)
 
 SQ_SIZE = 90
 BOARD_PX = SQ_SIZE * 6
-PANEL_W = 320
-WIN_W = BOARD_PX + PANEL_W
-WIN_H = BOARD_PX
+BOARD_MARGIN = 20
+PANEL_GAP = 18
+PANEL_W = 360
+BOARD_X = BOARD_MARGIN
+BOARD_Y = BOARD_MARGIN
+PANEL_X = BOARD_X + BOARD_PX + PANEL_GAP
+WIN_W = PANEL_X + PANEL_W + BOARD_MARGIN
+WIN_H = BOARD_PX + BOARD_MARGIN * 2
 TITLE_BAR_H = 0
 WINDOW_H = WIN_H
 FPS = 60
 PIECE_SCALE = 0.86
 ANIM_MS = 160
+SOUND_RATE = 44100
 
 PIECE_FILES = {
     ("W", King): "wk.png",
@@ -51,6 +58,7 @@ PIECE_FILES = {
 
 class GUI:
     def __init__(self):
+        pygame.mixer.pre_init(SOUND_RATE, -16, 1, 512)
         pygame.init()
         self.screen = pygame.display.set_mode((WIN_W, WIN_H))
         self.content_surface = pygame.Surface((WIN_W, WIN_H))
@@ -69,6 +77,7 @@ class GUI:
 
         self.piece_sprites = {}
         self.use_sprite_pieces = self._load_piece_sprites()
+        self.sounds = self._load_sounds()
         self.board_surface = self._build_board_surface()
         self.menu_wood_surface = self._load_menu_wood_surface()
         self.panel_wood_surface = pygame.transform.smoothscale(self.menu_wood_surface, (PANEL_W, WIN_H))
@@ -99,7 +108,7 @@ class GUI:
         dragging_slider = False
         focus = "W"
         option_keys = list(option_defs.keys())
-        self._set_window_title("SmoL Chess — Select Players")
+        self._set_window_title("SmoL Chess - Select Players")
 
         while True:
             mouse_pos = self._content_mouse_pos()
@@ -155,7 +164,7 @@ class GUI:
             "W": {"name": white_player.name, "type": white_type},
             "B": {"name": black_player.name, "type": black_type},
         }
-        self._set_window_title(f"SmoL Chess — {white_player.name} vs {black_player.name}")
+        self._set_window_title(f"SmoL Chess - {white_player.name} vs {black_player.name}")
 
     def _set_window_title(self, title):
         self.window_title = title
@@ -324,7 +333,12 @@ class GUI:
         selected_square=None,
         legal_targets=None,
     ):
-        self.screen.fill(BG)
+        self.screen.blit(self.menu_wood_surface, (0, 0))
+        wash = pygame.Surface((WIN_W, WIN_H), pygame.SRCALPHA)
+        wash.fill((9, 10, 14, 178))
+        self.screen.blit(wash, (0, 0))
+        pygame.draw.circle(self.screen, (192, 128, 54, 28), (BOARD_X + 76, BOARD_Y + 58), 140)
+        pygame.draw.circle(self.screen, (69, 104, 70, 28), (PANEL_X + PANEL_W - 34, WIN_H - 40), 150)
         self._draw_board()
         self._draw_highlights(selected_square, legal_targets or [])
         self._draw_pieces(board)
@@ -409,28 +423,80 @@ class GUI:
         self.move_log.append(text)
         self.log_scroll_offset = 0
 
-    def show_winner(self, message, board):
-        self.update(board, message, 0, current_turn=None, last_move_time=None)
-        overlay = pygame.Surface((WIN_W, WIN_H), pygame.SRCALPHA)
-        overlay.fill((0, 0, 0, 170))
-        self.screen.blit(overlay, (0, 0))
+    def reset_match_state(self):
+        self.move_log.clear()
+        self.log_scroll_offset = 0
+        self.last_move = None
+        self.check_king = None
+        self.anim_active = False
 
-        text = self.font_big.render(message, True, ACCENT_GOLD)
-        rect = text.get_rect(center=(WIN_W // 2, WIN_H // 2))
-        shadow = self.font_big.render(message, True, (0, 0, 0))
-        self.screen.blit(shadow, rect.move(3, 3))
-        self.screen.blit(text, rect)
+    def show_winner(self, message, board, move_number=0):
+        self.update(board, message, move_number, current_turn=None, last_move_time=None)
+        base_surface = self.content_surface.copy()
+        buttons = {
+            "restart": pygame.Rect(WIN_W // 2 - 230, WIN_H // 2 + 74, 210, 48),
+            "menu": pygame.Rect(WIN_W // 2 + 20, WIN_H // 2 + 74, 210, 48),
+        }
 
-        sub = self.font_title.render("Close window to exit", True, TEXT_COLOR)
-        self.screen.blit(sub, sub.get_rect(center=(WIN_W // 2, WIN_H // 2 + 50)))
-
-        pygame.display.flip()
-        waiting = True
-        while waiting:
+        while True:
+            mouse_pos = self._content_mouse_pos()
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
-                    waiting = False
-        pygame.quit()
+                    pygame.quit()
+                    raise SystemExit
+                if event.type == pygame.KEYDOWN:
+                    if event.key == pygame.K_ESCAPE:
+                        return "menu"
+                    if event.key == pygame.K_RETURN:
+                        return "restart"
+                if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                    content_pos = self._content_event_pos(event)
+                    if content_pos is None:
+                        continue
+                    if buttons["restart"].collidepoint(content_pos):
+                        return "restart"
+                    if buttons["menu"].collidepoint(content_pos):
+                        return "menu"
+
+            self._draw_content(lambda: self._draw_winner_overlay(message, buttons, mouse_pos, base_surface))
+            pygame.display.flip()
+            self.clock.tick(FPS)
+
+    def _draw_winner_overlay(self, message, buttons, mouse_pos, base_surface):
+        self.screen.blit(base_surface, (0, 0))
+        overlay = pygame.Surface((WIN_W, WIN_H), pygame.SRCALPHA)
+        overlay.fill((0, 0, 0, 182))
+        self.screen.blit(overlay, (0, 0))
+
+        card_rect = pygame.Rect(WIN_W // 2 - 330, WIN_H // 2 - 112, 660, 270)
+        self._draw_round_card(card_rect, (28, 21, 14), border_color=(232, 179, 91))
+
+        title_font = self._fit_font_display(message, card_rect.width - 70)
+        title = title_font.render(message, True, ACCENT_GOLD)
+        title_rect = title.get_rect(center=(card_rect.centerx, card_rect.y + 64))
+        shadow = title_font.render(message, True, (0, 0, 0))
+        self.screen.blit(shadow, title_rect.move(3, 3))
+        self.screen.blit(title, title_rect)
+
+        sub = self.font_label.render("Choose what happens next", True, self.panel_text_color)
+        self.screen.blit(sub, sub.get_rect(center=(card_rect.centerx, card_rect.y + 108)))
+
+        specs = [
+            ("restart", "Restart Game", "Same players, fresh board"),
+            ("menu", "End Game", "Return to main menu"),
+        ]
+        for key, label, hint in specs:
+            rect = buttons[key]
+            hovered = rect.collidepoint(mouse_pos)
+            color = BUTTON_HOVER if hovered else BUTTON_BG
+            self._draw_round_card(rect, color, border_color=(255, 225, 154))
+            text = self.font_menu_card.render(label, True, (34, 24, 10))
+            self.screen.blit(text, text.get_rect(center=(rect.centerx, rect.y + 18)))
+            hint_text = self.font_menu_hint.render(hint, True, (72, 51, 24))
+            self.screen.blit(hint_text, hint_text.get_rect(center=(rect.centerx, rect.y + 36)))
+
+        keyboard = self.font_menu_hint.render("Enter restarts | Esc returns to menu", True, (216, 211, 196))
+        self.screen.blit(keyboard, keyboard.get_rect(center=(card_rect.centerx, card_rect.bottom - 26)))
 
     def _pick_font(self, names, size, bold=False):
         for name in names:
@@ -440,6 +506,39 @@ class GUI:
                 font.set_bold(bold)
                 return font
         return pygame.font.SysFont(None, size, bold=bold)
+
+    def _load_sounds(self):
+        if not pygame.mixer.get_init():
+            return {}
+
+        try:
+            return {
+                "move": self._make_tone([(520, 0.55), (780, 0.25)], 0.075, 0.28),
+                "capture": self._make_tone([(185, 0.9), (92, 0.55), (410, 0.18)], 0.15, 0.42),
+            }
+        except pygame.error:
+            return {}
+
+    def _make_tone(self, tones, duration, volume):
+        sample_count = int(SOUND_RATE * duration)
+        samples = array("h")
+
+        for i in range(sample_count):
+            t = i / SOUND_RATE
+            progress = i / max(1, sample_count - 1)
+            envelope = (1.0 - progress) ** 2
+            value = 0.0
+            for frequency, weight in tones:
+                value += math.sin(2 * math.pi * frequency * t) * weight
+            value /= max(1.0, sum(weight for _, weight in tones))
+            samples.append(int(32767 * volume * envelope * value))
+
+        return pygame.mixer.Sound(buffer=samples.tobytes())
+
+    def play_move_sound(self, capture=False):
+        sound = self.sounds.get("capture" if capture else "move")
+        if sound is not None:
+            sound.play()
 
     def _build_board_surface(self):
         board_surf = pygame.Surface((BOARD_PX, BOARD_PX))
@@ -576,8 +675,8 @@ class GUI:
 
         self.anim_active = True
         self.anim_sprite = sprite
-        self.anim_from_px = (c0 * SQ_SIZE + SQ_SIZE // 2, r0 * SQ_SIZE + SQ_SIZE // 2)
-        self.anim_to_px = (c1 * SQ_SIZE + SQ_SIZE // 2, r1 * SQ_SIZE + SQ_SIZE // 2)
+        self.anim_from_px = (BOARD_X + c0 * SQ_SIZE + SQ_SIZE // 2, BOARD_Y + r0 * SQ_SIZE + SQ_SIZE // 2)
+        self.anim_to_px = (BOARD_X + c1 * SQ_SIZE + SQ_SIZE // 2, BOARD_Y + r1 * SQ_SIZE + SQ_SIZE // 2)
         self.anim_to_sq = (r1, c1)
         self.anim_start_ms = pygame.time.get_ticks()
 
@@ -586,16 +685,24 @@ class GUI:
         self.screen.blit(sprite, rect)
 
     def _sq_rect(self, row, col):
-        return pygame.Rect(col * SQ_SIZE, row * SQ_SIZE, SQ_SIZE, SQ_SIZE)
+        return pygame.Rect(BOARD_X + col * SQ_SIZE, BOARD_Y + row * SQ_SIZE, SQ_SIZE, SQ_SIZE)
 
     def _board_square_from_pos(self, pos):
         x, y = pos
-        if not (0 <= x < BOARD_PX and 0 <= y < BOARD_PX):
+        if not (BOARD_X <= x < BOARD_X + BOARD_PX and BOARD_Y <= y < BOARD_Y + BOARD_PX):
             return None, None
-        return y // SQ_SIZE, x // SQ_SIZE
+        return (y - BOARD_Y) // SQ_SIZE, (x - BOARD_X) // SQ_SIZE
 
     def _draw_board(self):
-        self.screen.blit(self.board_surface, (0, 0))
+        shadow = pygame.Surface((BOARD_PX + 24, BOARD_PX + 24), pygame.SRCALPHA)
+        pygame.draw.rect(shadow, (0, 0, 0, 115), shadow.get_rect(), border_radius=26)
+        self.screen.blit(shadow, (BOARD_X - 6, BOARD_Y - 2))
+
+        frame = pygame.Rect(BOARD_X - 10, BOARD_Y - 10, BOARD_PX + 20, BOARD_PX + 20)
+        pygame.draw.rect(self.screen, (56, 31, 15), frame, border_radius=22)
+        pygame.draw.rect(self.screen, (181, 112, 48), frame, width=2, border_radius=22)
+        pygame.draw.rect(self.screen, (247, 197, 102), frame.inflate(-8, -8), width=1, border_radius=18)
+        self.screen.blit(self.board_surface, (BOARD_X, BOARD_Y))
 
     def _draw_highlights(self, selected_square=None, legal_targets=None):
         surf = pygame.Surface((SQ_SIZE, SQ_SIZE), pygame.SRCALPHA)
@@ -670,8 +777,8 @@ class GUI:
                     continue
 
                 sprite = self.piece_sprites.get((piece.color, type(piece))) if self.use_sprite_pieces else None
-                center_x = col * SQ_SIZE + SQ_SIZE // 2
-                center_y = row * SQ_SIZE + SQ_SIZE // 2
+                center_x = BOARD_X + col * SQ_SIZE + SQ_SIZE // 2
+                center_y = BOARD_Y + row * SQ_SIZE + SQ_SIZE // 2
 
                 if sprite is not None:
                     self._draw_piece_sprite(sprite, center_x, center_y)
@@ -684,21 +791,21 @@ class GUI:
         cols = "abcdef"
         for i in range(6):
             col_label = self.font_label.render(cols[i], True, BORDER)
-            self.screen.blit(col_label, (i * SQ_SIZE + SQ_SIZE - 14, BOARD_PX - 16))
+            self.screen.blit(col_label, (BOARD_X + i * SQ_SIZE + SQ_SIZE - 14, BOARD_Y + BOARD_PX - 16))
             row_label = self.font_label.render(str(6 - i), True, BORDER)
-            self.screen.blit(row_label, (4, i * SQ_SIZE + 4))
+            self.screen.blit(row_label, (BOARD_X + 4, BOARD_Y + i * SQ_SIZE + 4))
 
     def _draw_panel(self, status_text, move_number, current_turn, last_move_time):
-        panel_rect = pygame.Rect(BOARD_PX, 0, PANEL_W, WIN_H)
+        panel_rect = pygame.Rect(PANEL_X, BOARD_Y - 10, PANEL_W, BOARD_PX + 20)
         self.screen.blit(self.panel_wood_surface, panel_rect.topleft)
         panel_tint = pygame.Surface((PANEL_W, WIN_H), pygame.SRCALPHA)
-        panel_tint.fill((12, 7, 4, 132))
+        panel_tint.fill((12, 7, 4, 148))
         self.screen.blit(panel_tint, panel_rect.topleft)
-        pygame.draw.line(self.screen, (64, 35, 18), (BOARD_PX, 0), (BOARD_PX, WIN_H), 3)
-        pygame.draw.line(self.screen, (154, 102, 52), (BOARD_PX + 3, 0), (BOARD_PX + 3, WIN_H), 1)
+        pygame.draw.rect(self.screen, (54, 30, 14), panel_rect, width=3, border_radius=20)
+        pygame.draw.rect(self.screen, (171, 106, 48), panel_rect.inflate(-5, -5), width=1, border_radius=17)
 
-        x = BOARD_PX + 14
-        y = 16
+        x = panel_rect.x + 16
+        y = panel_rect.y + 16
 
         title = self.font_title.render("SmoL Chess", True, (255, 217, 132))
         self.screen.blit(title, (x, y))
@@ -709,28 +816,26 @@ class GUI:
         y = self._draw_player_card(x, y, "B", (215, 215, 230), Queen)
         y += 14
 
-        stats_rect = pygame.Rect(x, y, PANEL_W - 28, 124)
+        stats_rect = pygame.Rect(x, y, PANEL_W - 32, 136)
         self._draw_wood_card(stats_rect)
         status_font = self._fit_font_title(status_text, stats_rect.width - 24)
-        status = status_font.render(status_text, True, (255, 205, 121))
-        self.screen.blit(status, (stats_rect.x + 12, stats_rect.y + 10))
+        self._draw_fit_text(status_text, status_font, (255, 205, 121), (stats_rect.x + 12, stats_rect.y + 10), stats_rect.width - 24)
 
         move_time_text = "---" if last_move_time is None else f"{last_move_time:.2f}s"
         rows = [
             f"Move: {move_number}",
             f"Turn: {self._turn_label(current_turn)}",
-            f"Last Move Time: {move_time_text}",
-            f"White Player: {self.match_players['W']['type']}",
-            f"Black Player: {self.match_players['B']['type']}",
+            f"Last move: {move_time_text}",
+            f"White AI: {self.match_players['W']['type']}",
+            f"Black AI: {self.match_players['B']['type']}",
         ]
         row_y = stats_rect.y + 44
         for row_text in rows:
-            rendered = self.font_log.render(row_text, True, self.panel_text_color)
-            self.screen.blit(rendered, (stats_rect.x + 12, row_y))
-            row_y += 15
+            self._draw_fit_text(row_text, self.font_log, self.panel_text_color, (stats_rect.x + 12, row_y), stats_rect.width - 24)
+            row_y += 16
         y = stats_rect.bottom + 12
 
-        log_rect = pygame.Rect(x, y, PANEL_W - 28, WIN_H - y - 14)
+        log_rect = pygame.Rect(x, y, PANEL_W - 32, panel_rect.bottom - y - 16)
         self._draw_wood_card(log_rect)
         log_title = self.font_label.render("Move Log", True, (255, 217, 132))
         self.screen.blit(log_title, (log_rect.x + 16, log_rect.y + 10))
@@ -744,6 +849,7 @@ class GUI:
         self.log_scroll_offset = max(0, min(max_offset, self.log_scroll_offset))
         line_y = self.log_scroll_rect.y
         for entry in visible_entries[self.log_scroll_offset:]:
+            entry = self._ellipsize(entry, self.font_log, self.log_scroll_rect.width - 6)
             rendered = self.font_log.render(entry, True, self.panel_muted_color)
             self.screen.blit(rendered, (self.log_scroll_rect.x + 2, line_y))
             line_y += 16
@@ -755,7 +861,7 @@ class GUI:
             self._draw_log_scrollbar(self.log_scroll_rect, len(visible_entries))
 
     def _draw_player_card(self, x, y, side, accent_color, sprite_piece):
-        rect = pygame.Rect(x, y, PANEL_W - 28, 72)
+        rect = pygame.Rect(x, y, PANEL_W - 32, 70)
         self._draw_wood_card(rect)
         sprite = self._scaled_sprite(side, sprite_piece, 42)
         if sprite is not None:
@@ -764,9 +870,9 @@ class GUI:
         side_label = "White" if side == "W" else "Black"
         text_area = pygame.Rect(rect.x + 56, rect.y + 10, rect.width - 70, rect.height - 18)
         line1 = self._fit_font_label(f"{side_label}: {self.match_players[side]['name']}", text_area.width)
-        line2 = self._fit_font_label(f"Player Type: {self.match_players[side]['type']}", text_area.width)
-        self.screen.blit(line1.render(f"{side_label}: {self.match_players[side]['name']}", True, accent_color), (text_area.x, text_area.y + 6))
-        self.screen.blit(line2.render(f"Player Type: {self.match_players[side]['type']}", True, self.panel_text_color), (text_area.x, text_area.y + 28))
+        line2 = self._fit_font_label(f"Type: {self.match_players[side]['type']}", text_area.width)
+        self._draw_fit_text(f"{side_label}: {self.match_players[side]['name']}", line1, accent_color, (text_area.x, text_area.y + 6), text_area.width)
+        self._draw_fit_text(f"Type: {self.match_players[side]['type']}", line2, self.panel_text_color, (text_area.x, text_area.y + 28), text_area.width)
         return rect.bottom
 
     def _draw_log_scrollbar(self, rect, total_entries):
@@ -782,6 +888,20 @@ class GUI:
         thumb = pygame.Rect(track.x, thumb_y, track.width, thumb_h)
         pygame.draw.rect(self.screen, (204, 154, 79), thumb, border_radius=3)
 
+    def _ellipsize(self, text, font, max_width):
+        if font.size(text)[0] <= max_width:
+            return text
+
+        suffix = "..."
+        trimmed = text
+        while trimmed and font.size(trimmed + suffix)[0] > max_width:
+            trimmed = trimmed[:-1]
+        return (trimmed.rstrip() + suffix) if trimmed else suffix
+
+    def _draw_fit_text(self, text, font, color, pos, max_width):
+        fitted = self._ellipsize(text, font, max_width)
+        self.screen.blit(font.render(fitted, True, color), pos)
+
     def _fit_font_label(self, text, max_width):
         for size in (14, 13, 12, 11):
             font = self._pick_font(["dejavusansmono", "liberationmono", "consolas"], size)
@@ -795,6 +915,13 @@ class GUI:
             if font.size(text)[0] <= max_width:
                 return font
         return self._pick_font(["dejavusansmono", "liberationmono", "consolas"], 14, bold=True)
+
+    def _fit_font_display(self, text, max_width):
+        for size in (40, 38, 36, 34, 32, 30, 28, 26, 24):
+            font = self._pick_font(["dejavusans", "liberationsans", "consolas"], size, bold=True)
+            if font.size(text)[0] <= max_width:
+                return font
+        return self._pick_font(["dejavusans", "liberationsans", "consolas"], 24, bold=True)
 
     def _turn_label(self, current_turn):
         if current_turn == "W":
@@ -816,7 +943,7 @@ class GUI:
         self.screen.blit(shadow, (rect.x + 4, rect.y + 4))
 
         card = pygame.Surface((rect.width, rect.height), pygame.SRCALPHA)
-        card.blit(self.panel_wood_surface, (-max(0, rect.x - BOARD_PX), -rect.y))
+        card.blit(self.panel_wood_surface, (-max(0, rect.x - PANEL_X), -rect.y))
         shade = pygame.Surface((rect.width, rect.height), pygame.SRCALPHA)
         shade.fill((8, 4, 2, 182))
         card.blit(shade, (0, 0))
@@ -832,16 +959,16 @@ class GUI:
         pygame.draw.rect(self.screen, (96, 57, 28), inner, width=1, border_radius=14)
 
     def _menu_layout(self, option_defs):
-        left_panel = pygame.Rect(48, 108, 340, 306)
-        right_panel = pygame.Rect(WIN_W - 388, 108, 340, 306)
-        slider_box = pygame.Rect(WIN_W // 2 - 205, 422, 410, 42)
+        left_panel = pygame.Rect(58, 118, 360, 318)
+        right_panel = pygame.Rect(WIN_W - 418, 118, 360, 318)
+        slider_box = pygame.Rect(WIN_W // 2 - 220, 448, 440, 44)
         slider_track = pygame.Rect(slider_box.x + 42, slider_box.y + 24, slider_box.width - 84, 6)
-        start_button = pygame.Rect(WIN_W // 2 - 100, 474, 200, 40)
+        start_button = pygame.Rect(WIN_W // 2 - 106, 506, 212, 42)
 
         cards = {"W": {}, "B": {}}
         for idx, key in enumerate(option_defs.keys()):
-            cards["W"][key] = pygame.Rect(left_panel.x + 18, left_panel.y + 68 + idx * 52, left_panel.width - 36, 42)
-            cards["B"][key] = pygame.Rect(right_panel.x + 18, right_panel.y + 68 + idx * 52, right_panel.width - 36, 42)
+            cards["W"][key] = pygame.Rect(left_panel.x + 18, left_panel.y + 72 + idx * 54, left_panel.width - 36, 44)
+            cards["B"][key] = pygame.Rect(right_panel.x + 18, right_panel.y + 72 + idx * 54, right_panel.width - 36, 44)
 
         return {
             "panels": {"W": left_panel, "B": right_panel},
@@ -880,14 +1007,14 @@ class GUI:
         pygame.draw.circle(self.screen, BUTTON_HOVER if knob.collidepoint(mouse_pos) else BUTTON_BG, knob.center, 9)
 
     def _draw_menu(self, option_defs, selected, focus, layout, mouse_pos, max_ai_time):
-        self.screen.fill(BG)
-        self.screen.blit(self.board_surface, (0, 0))
+        self.screen.blit(self.menu_wood_surface, (0, 0))
         overlay = pygame.Surface((WIN_W, WIN_H), pygame.SRCALPHA)
-        overlay.fill((10, 10, 16, 215))
+        overlay.fill((10, 10, 16, 178))
         self.screen.blit(overlay, (0, 0))
 
-        pygame.draw.circle(self.screen, (64, 48, 28), (110, 90), 90)
-        pygame.draw.circle(self.screen, (50, 68, 42), (WIN_W - 120, WIN_H - 80), 120)
+        pygame.draw.circle(self.screen, (238, 171, 73, 38), (138, 92), 110)
+        pygame.draw.circle(self.screen, (64, 105, 68, 44), (WIN_W - 130, WIN_H - 84), 142)
+        pygame.draw.rect(self.screen, (255, 218, 133, 30), pygame.Rect(36, 34, WIN_W - 72, WIN_H - 68), width=1, border_radius=28)
 
         title = self.font_menu_title.render("SmoL Chess", True, ACCENT_GOLD)
         subtitle = self.font_menu_subtitle.render(
@@ -910,7 +1037,7 @@ class GUI:
         text = self.font_menu_card.render("Start Match", True, (34, 24, 10))
         self.screen.blit(text, text.get_rect(center=button_rect.center))
 
-        hint = self.font_menu_hint.render("Tab switches side • A/D or ←/→ changes player • Enter starts", True, (194, 197, 205))
+        hint = self.font_menu_hint.render("Tab switches side | A/D or arrows change player | Enter starts", True, (216, 211, 196))
         self.screen.blit(hint, hint.get_rect(center=(WIN_W // 2, WIN_H - 12)))
 
     def _draw_menu_side(self, side, heading, selected_key, focused, option_defs, panel_rect, card_rects, mouse_pos):
@@ -934,11 +1061,10 @@ class GUI:
             border = ACCENT_GREEN if is_selected else (112, 114, 126)
             self._draw_round_card(rect, bg, border_color=border)
 
-            title = self.font_menu_card.render(option_defs[key]["title"], True, TEXT_COLOR)
-            subtitle = self.font_menu_hint.render(option_defs[key]["subtitle"], True, (180, 184, 194))
-            self.screen.blit(title, (rect.x + 14, rect.y + 10))
-            self.screen.blit(subtitle, (rect.x + 14, rect.y + 28))
+            title_width = rect.width - (70 if is_selected else 28)
+            self._draw_fit_text(option_defs[key]["title"], self.font_menu_card, TEXT_COLOR, (rect.x + 14, rect.y + 9), title_width)
+            self._draw_fit_text(option_defs[key]["subtitle"], self.font_menu_hint, (180, 184, 194), (rect.x + 14, rect.y + 28), rect.width - 28)
 
             if is_selected:
-                marker = self.font_menu_hint.render("Selected", True, ACCENT_GREEN)
-                self.screen.blit(marker, (rect.right - 62, rect.y + 16))
+                pygame.draw.circle(self.screen, ACCENT_GREEN, (rect.right - 24, rect.centery), 8)
+                pygame.draw.circle(self.screen, (18, 25, 18), (rect.right - 24, rect.centery), 4)

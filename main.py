@@ -148,11 +148,9 @@ def resolve_current_legal_move(board, color, move):
     return None
 
 
-def run_game():
+def play_match(gui, selection):
     board = create_board()
-    gui = GUI()
-
-    selection = gui.show_start_menu(OPTION_DEFS, default_white="human", default_black="mcts")
+    gui.reset_match_state()
     max_ai_time = selection.get("max_ai_time", 4.5)
     white, black = build_players(selection, max_ai_time)
     gui.set_match_players(
@@ -186,8 +184,7 @@ def run_game():
             gui.add_log(f"CHECKMATE! {message}")
             gui.update(board, "Checkmate!", move_num, current_turn=current, last_move_time=last_move_time)
             pygame.time.delay(1000)
-            gui.show_winner(message, board)
-            return
+            return gui.show_winner(message, board, move_num)
 
         reason = draw_reason(board, current, draw_tracker.snapshot())
         if reason:
@@ -202,15 +199,13 @@ def run_game():
                 last_move_time=last_move_time,
             )
             pygame.time.delay(1000)
-            gui.show_winner(message, board)
-            return
+            return gui.show_winner(message, board, move_num)
 
         if move_num >= MAX_MOVES:
             gui.add_log("Move limit - Draw!")
             gui.update(board, "Draw!", move_num, current_turn=current, last_move_time=last_move_time)
             pygame.time.delay(1000)
-            gui.show_winner("Draw - Move Limit!", board)
-            return
+            return gui.show_winner("Draw - Move Limit!", board, move_num)
 
         in_check = is_in_check(board, current)
         check_king_pos = None
@@ -261,8 +256,7 @@ def run_game():
 
         if result is None:
             gui.add_log(f"{color_name} has no moves - Draw!")
-            gui.show_winner("Draw - No Moves!", board)
-            return
+            return gui.show_winner("Draw - No Moves!", board, move_num)
 
         resolved = resolve_current_legal_move(board, current, result)
         if resolved is None:
@@ -271,8 +265,7 @@ def run_game():
 
         if resolved is None:
             gui.add_log(f"{color_name} has no legal fallback - Draw!")
-            gui.show_winner("Draw - No Moves!", board)
-            return
+            return gui.show_winner("Draw - No Moves!", board, move_num)
 
         result = resolved
         piece, dest = result
@@ -291,6 +284,7 @@ def run_game():
             notation += " (escapes check)"
 
         apply_move(board, piece, dest)
+        gui.play_move_sound(capture=captured_piece is not None)
         draw_tracker.record_after_move(board, opponent, moved_was_pawn, captured_piece)
         move_num += 1
         last_move = ((r0, c0), (r1, c1))
@@ -320,6 +314,17 @@ def run_game():
         )
 
         current = opponent
+
+
+def run_game():
+    gui = GUI()
+    selection = None
+    next_action = "menu"
+
+    while True:
+        if selection is None or next_action == "menu":
+            selection = gui.show_start_menu(OPTION_DEFS, default_white="human", default_black="mcts")
+        next_action = play_match(gui, selection)
 
 
 if __name__ == "__main__":
